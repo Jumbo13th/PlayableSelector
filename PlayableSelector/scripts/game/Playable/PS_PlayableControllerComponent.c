@@ -9,16 +9,10 @@ class PS_PlayableControllerComponent : ScriptComponent
 {
 	protected IEntity m_Camera;
 	protected IEntity m_InitialEntity;
-	protected vector m_vVoNPosition = PS_VoNRoomsManager.roomInitialPosition;
 	protected SCR_EGameModeState m_eMenuState = SCR_EGameModeState.PREGAME;
 	protected bool m_bAfterInitialSwitch = false;
 	protected vector m_vObserverPosition = "0 0 0";
 	protected vector lastCameraTransform[4];
-
-	void SetVoNPosition(vector VoNPosition)
-	{
-		m_vVoNPosition = VoNPosition;
-	}
 	
 	[RplProp()]
 	bool m_bOutFreezeTime;
@@ -71,6 +65,19 @@ class PS_PlayableControllerComponent : ScriptComponent
 	void RPC_SwitchToMenuServer(SCR_EGameModeState state)
 	{
 		SwitchToMenu(state);
+	}
+
+	// Notify this player they were kicked from their slot (Owner-targeted, not broadcast)
+	void NotifyKickOwner()
+	{
+		Rpc(RPC_NotifyKickOwner);
+	}
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	void RPC_NotifyKickOwner()
+	{
+		SCR_ChatPanelManager chatPanelManager = SCR_ChatPanelManager.GetInstance();
+		ChatCommandInvoker invoker = chatPanelManager.GetCommandInvoker("lmsg");
+		invoker.Invoke(null, "#PS-Lobby_RoleKick");
 	}
 
 	void SwitchToMenu(SCR_EGameModeState state)
@@ -182,9 +189,13 @@ class PS_PlayableControllerComponent : ScriptComponent
 	// ------ SpawnPrefab ------
 	void SpawnPrefab(string GUID, vector position)
 	{
-		IEntity camera = GetGame().GetCameraManager().CurrentCamera();
 		if (position == "0 0 0")
+		{
+			IEntity camera = GetGame().GetCameraManager().CurrentCamera();
+			if (!camera)
+				return;
 			position = camera.GetOrigin();
+		}
 		Rpc(RPC_SpawnPrefab, position, GUID);
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
@@ -378,18 +389,10 @@ class PS_PlayableControllerComponent : ScriptComponent
 		ForceSwitch(playerId);
 	}
 
-	// Just don't look at it.
 	override protected void OnPostInit(IEntity owner)
-	{  
-		/*
-		EntitySpawnParams params = new EntitySpawnParams(); 
-		Resource resource = Resource.Load("{6EAA30EF620F4A2E}Prefabs/Editor/Camera/ManualCameraSpectator.et");
-		m_Camera = GetGame().SpawnEntityPrefab(resource, GetGame().GetWorld(), params);
-		*/
-		
-		//SetEventMask(GetOwner(), EntityEvent.POSTFIXEDFRAME);
-		GetGame().GetCallqueue().CallLater(UpdatePosition, 0, true, false);
+	{
 		SetEventMask(GetOwner(), EntityEvent.FRAME);
+		GetGame().GetCallqueue().CallLater(UpdatePosition, 0, true, false);
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(PlayerController.Cast(GetOwner()));
 		playerController.m_OnControlledEntityChanged.Insert(OnControlledEntityChanged);
 
@@ -413,18 +416,19 @@ class PS_PlayableControllerComponent : ScriptComponent
 	private void OnControlledEntityChanged(IEntity from, IEntity to)
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		
+
 		// Write entity change to replay
 		if (Replication.IsServer()) {
 			RplId toRplId = RplId.Invalid();
 			if (to) {
 				RplComponent rplTo = RplComponent.Cast(to.FindComponent(RplComponent));
-				toRplId = rplTo.Id();
+				if (rplTo)
+					toRplId = rplTo.Id();
 			}
 		}
 
 		RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-		if (!rpl.IsOwner())
+		if (!rpl || !rpl.IsOwner())
 			return;
 		if (!from && !m_bAfterInitialSwitch)
 			return;
@@ -434,7 +438,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 			m_vObserverPosition = from.GetOrigin();
 		}
 		m_bAfterInitialSwitch = true;
-		
+
 		PS_LobbyVoNComponent vonFrom;
 		if (from)
 			vonFrom = PS_LobbyVoNComponent.Cast(from.FindComponent(PS_LobbyVoNComponent));
@@ -444,7 +448,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 		if (!vonTo)
 		{
 			PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
-			if (gameModeCoop.GetState() == SCR_EGameModeState.GAME)
+			if (gameModeCoop && gameModeCoop.GetState() == SCR_EGameModeState.GAME)
 				GetGame().GetCallqueue().Call(TellFuckingEditorCoreThanWeAlive, thisPlayerController.GetPlayerId(), to);
 		}
 		if (vonTo && !vonFrom)
@@ -589,58 +593,72 @@ class PS_PlayableControllerComponent : ScriptComponent
 		actionManager.SetActionValue("CarHazardLights", 0);
 	}
 
-	override void EOnFixedFrame(IEntity owner, float timeSlice)
-	{
-		UpdatePosition(false);
-	}
-	
+
+	protected bool m_bInitialPositionSet = false;
+
 	void UpdatePosition(bool force)
 	{
-		RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-		if (!rpl.IsOwner())
+		if (!GetOwner())
+		{
+			GetGame().GetCallqueue().Remove(UpdatePosition);
 			return;
-		
-		// Lets fight with phisyc engine
+		}
+
+		RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
+		if (!rpl || !rpl.IsOwner())
+			return;
+
 		if (m_InitialEntity)
 		{
 			PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+			if (!thisPlayerController)
+			{
+				GetGame().GetCallqueue().Remove(UpdatePosition);
+				return;
+			}
 			int playerId = thisPlayerController.GetPlayerId();
-			m_vVoNPosition = Vector(0, 100000, 0) + Vector(1000 * Math.Mod(playerId, 10), 5000 * Math.Floor(Math.Mod(playerId, 100) / 10), 5000 * Math.Floor(playerId / 100));
+			vector targetPos = Vector(5000, 100000, 5000) + Vector(1000 * Math.Mod(playerId, 10), 5000 * Math.Floor(Math.Mod(playerId, 100) / 10), 5000 * Math.Floor(playerId / 100));
+
+			Physics physics = m_InitialEntity.GetPhysics();
+			if (physics && physics.IsActive())
+			{
+				physics.SetActive(ActiveState.INACTIVE);
+			}
+
 			vector currentOrigin = m_InitialEntity.GetOrigin();
-			//if (currentOrigin == m_vVoNPosition) return;
-			//Print("Move to: " + m_vVoNPosition.ToString());
-			
-			GameEntity gameEntity = GameEntity.Cast(m_InitialEntity);
-			vector mat[4];
-			Math3D.MatrixIdentity4(mat);
-			mat[3] = m_vVoNPosition;
-			if (force)
-				gameEntity.Teleport(mat);
-			gameEntity.SetTransform(mat);
-			
+			float distSq = vector.DistanceSq(currentOrigin, targetPos);
+
+			if (distSq > 1.0 || force)
+			{
+				GameEntity gameEntity = GameEntity.Cast(m_InitialEntity);
+				vector mat[4];
+				Math3D.MatrixIdentity4(mat);
+				mat[3] = targetPos;
+				if (force)
+					gameEntity.Teleport(mat);
+				gameEntity.SetTransform(mat);
+			}
+
 			MenuBase menu = GetGame().GetMenuManager().GetTopMenu();
 			if (menu && (menu.IsInherited(PS_PreviewMapMenu) || menu.IsInherited(PS_CoopLobby) || menu.IsInherited(PS_BriefingMapMenu)))
 			{
-				GetGame().GetCameraManager().CurrentCamera().SetWorldTransform(mat);
+				vector camMat[4];
+				Math3D.MatrixIdentity4(camMat);
+				camMat[3] = targetPos;
+				GetGame().GetCameraManager().CurrentCamera().SetWorldTransform(camMat);
 				if (m_Camera)
-					m_Camera.SetTransform(mat);	
+					m_Camera.SetTransform(camMat);
+
+				CameraBase cameraBase = GetGame().GetCameraManager().CurrentCamera();
+				if (cameraBase)
+					cameraBase.ApplyTransform(GetGame().GetWorld().GetTimeSlice());
 			}
 
-			// Who broke camera on map?
-			CameraBase cameraBase = GetGame().GetCameraManager().CurrentCamera();
-			if (cameraBase)
-				cameraBase.ApplyTransform(GetGame().GetWorld().GetTimeSlice());
- 
-
-			Physics physics = m_InitialEntity.GetPhysics();
-			if (physics)
+			if (!m_bInitialPositionSet && distSq <= 1.0)
 			{
-				//physics.SetVelocity("0 0 0");
-				//physics.SetAngularVelocity("0 0 0");
-				//physics.SetMass(0);
-				//physics.SetDamping(1, 1);
-				//physics.ChangeSimulationState(SimulationState.NONE);
-				physics.SetActive(ActiveState.INACTIVE);
+				m_bInitialPositionSet = true;
+				GetGame().GetCallqueue().Remove(UpdatePosition);
+				GetGame().GetCallqueue().CallLater(UpdatePosition, 1000, true, false);
 			}
 		} else {
 			PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
@@ -649,12 +667,14 @@ class PS_PlayableControllerComponent : ScriptComponent
 			{
 				PS_LobbyVoNComponent von = PS_LobbyVoNComponent.Cast(entity.FindComponent(PS_LobbyVoNComponent));
 				if (von)
+				{
 					m_InitialEntity = entity;
+					m_bInitialPositionSet = false;
+				}
 			}
 		}
 	}
 
-	// Save VoN boi for reuse
 	IEntity GetInitialEntity()
 	{
 		return m_InitialEntity;
@@ -722,38 +742,49 @@ class PS_PlayableControllerComponent : ScriptComponent
 	PS_LobbyVoNComponent GetVoN()
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		if (!thisPlayerController)
+			return null;
 		IEntity entity = thisPlayerController.GetControlledEntity();
+		if (!entity)
+			return null;
 		PS_LobbyVoNComponent von = PS_LobbyVoNComponent.Cast(entity.FindComponent(PS_LobbyVoNComponent));
 		return von;
 	}
-	RadioTransceiver GetVoNTransiver(int radioId)
+	RadioTransceiver GetVoNTransiver()
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		if (!thisPlayerController)
+			return null;
 		IEntity entity = thisPlayerController.GetControlledEntity();
+		if (!entity)
+			return null;
 		SCR_GadgetManagerComponent gadgetManager = SCR_GadgetManagerComponent.Cast(entity.FindComponent(SCR_GadgetManagerComponent));
+		if (!gadgetManager)
+			return null;
 		array<SCR_GadgetComponent> radios = gadgetManager.GetGadgetsByType(EGadgetType.RADIO);
-		IEntity radioEntity = radios[radioId].GetOwner();
+		if (!radios || radios.Count() < 2)
+			return null;
+		IEntity radioEntity = radios[1].GetOwner();
 		BaseRadioComponent radio = BaseRadioComponent.Cast(radioEntity.FindComponent(BaseRadioComponent));
+		if (!radio)
+			return null;
 		radio.SetPower(true);
 		RadioTransceiver transiver = RadioTransceiver.Cast(radio.GetTransceiver(0));
-		transiver.SetFrequency(radioId + 1);
+		if (!transiver)
+			return null;
+		transiver.SetFrequency(2);
 		return transiver;
 	}
 	void LobbyVoNEnable()
 	{
-		UpdatePosition(true);
 		GetGame().GetCallqueue().Remove(LobbyVoNDisableDelayed);
 		PS_LobbyVoNComponent von = GetVoN();
-		von.SetTransmitRadio(GetVoNTransiver(1));
-		von.SetCommMethod(ECommMethod.SQUAD_RADIO);
-		von.SetCapture(true);
-	}
-	void LobbyVoNRadioEnable()
-	{
-		UpdatePosition(true);
-		GetGame().GetCallqueue().Remove(LobbyVoNDisableDelayed);
-		PS_LobbyVoNComponent von = GetVoN();
-		von.SetTransmitRadio(GetVoNTransiver(0));
+		if (!von)
+			return;
+		RadioTransceiver transiver = GetVoNTransiver();
+		if (!transiver)
+			return;
+		von.SetTransmitRadio(transiver);
 		von.SetCommMethod(ECommMethod.SQUAD_RADIO);
 		von.SetCapture(true);
 	}
@@ -780,22 +811,31 @@ class PS_PlayableControllerComponent : ScriptComponent
 		if (!entity)
 			return;
 		SCR_GadgetManagerComponent gadgetManager = SCR_GadgetManagerComponent.Cast(entity.FindComponent(SCR_GadgetManagerComponent));
+		if (!gadgetManager)
+			return;
 		array<SCR_GadgetComponent> radios = gadgetManager.GetGadgetsByType(EGadgetType.RADIO);
-		if (radios.Count() > 0)
-		{
-			BaseRadioComponent radio = BaseRadioComponent.Cast(radios[0].GetOwner().FindComponent(BaseRadioComponent));
+		if (!radios || radios.Count() < 2)
+			return;
+		BaseRadioComponent radio = BaseRadioComponent.Cast(radios[0].GetOwner().FindComponent(BaseRadioComponent));
+		if (radio)
 			radio.SetEncryptionKey(VoNKey);
-			radio = BaseRadioComponent.Cast(radios[1].GetOwner().FindComponent(BaseRadioComponent));
+		radio = BaseRadioComponent.Cast(radios[1].GetOwner().FindComponent(BaseRadioComponent));
+		if (radio)
 			radio.SetEncryptionKey(VoNKeyLocal);
-		}
 	}
 	bool isVonInit()
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		if (!thisPlayerController)
+			return false;
 		IEntity entity = thisPlayerController.GetControlledEntity();
+		if (!entity)
+			return false;
 		SCR_GadgetManagerComponent gadgetManager = SCR_GadgetManagerComponent.Cast(entity.FindComponent(SCR_GadgetManagerComponent));
+		if (!gadgetManager)
+			return false;
 		IEntity radioEntity = gadgetManager.GetGadgetByType(EGadgetType.RADIO);
-		return radioEntity;
+		return radioEntity != null;
 	}
 	
 	void GetArmaIdFromServer(int playerId)
@@ -835,7 +875,8 @@ class PS_PlayableControllerComponent : ScriptComponent
 		EntitySpawnParams params = new EntitySpawnParams();
 		if (from)
 			from.GetTransform(params.Transform);
-		MoveToVoNRoom(thisPlayerController.GetPlayerId(), "", "");
+		// Defer VoN room change to spread RPC load during death transition
+		GetGame().GetCallqueue().CallLater(MoveToVoNRoom, 400, false, thisPlayerController.GetPlayerId(), "", "");
 		Resource resource = Resource.Load("{6EAA30EF620F4A2E}Prefabs/Editor/Camera/ManualCameraSpectator.et");
 		m_Camera = GetGame().SpawnEntityPrefab(resource, GetGame().GetWorld(), params);
 

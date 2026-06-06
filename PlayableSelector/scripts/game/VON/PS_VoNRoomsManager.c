@@ -10,23 +10,17 @@ class PS_VoNRoomsManagerClass: ScriptComponentClass
 typedef string VoNRoomKey;
 
 // Manage VoN "Rooms"
-// Flying wallles rooms for naked VoN bois.
+// Encryption-key-based voice channel isolation (no physical positioning).
 
 class PS_VoNRoomsManager : ScriptComponent
 {
 	// server data
-	ref map<int, vector> m_mRoomOffsets = new map<int, vector>(); // offset from initial position for each room
 	ref map<VoNRoomKey, int> m_mVoiceRoomsFromName = new map<VoNRoomKey, int>(); // room key to roomId relationship
-	
+
 	// Replication data
 	ref map<int, VoNRoomKey> m_mVoiceRooms = new map<int, VoNRoomKey>(); // room names for UI
 	ref map<int, int> m_mPlayersRooms = new map<int, int>(); // player to room relationship
-	
-	// Move speech bois to space
-	static vector roomInitialPosition = "-1 1000000 1";
-	
-	// offset every room
-	vector lastOffset;
+
 	int m_iLastRoomId = 1;
 	
 	// Invokers
@@ -42,9 +36,8 @@ class PS_VoNRoomsManager : ScriptComponent
 	{
 		SCR_BaseGameMode baseGameMode = SCR_BaseGameMode.Cast(GetGame().GetGameMode());
 		baseGameMode.GetOnPlayerConnected().Insert(OnPlayerConnected);
-		
-		// Set default room position
-		m_mRoomOffsets[0] = roomInitialPosition;
+
+		// Set default room (no position needed — isolation via encryption keys)
 		m_mVoiceRooms[0] = "";
 		m_mVoiceRoomsFromName[""] = 0;
 		if (Replication.IsServer()) m_bRplLoaded = true;
@@ -69,88 +62,71 @@ class PS_VoNRoomsManager : ScriptComponent
 	
 	// ------------------------- Room changing -------------------------
 	// Move to room by key and create if not exist, RUN ONLY ON SERVER
+	// Voice isolation is achieved via radio encryption keys — no physical positioning.
 	void MoveToRoom(int playerId, FactionKey factionKey, string roomName)
 	{
 		if (!Replication.IsServer()) return;
-		
+
 		// Create new room and id if need
 		int roomId = GetOrCreateRoomWithFaction(factionKey, roomName);
-		
+
 		// Skip if same room
 		if (roomId == GetPlayerRoom(playerId))
 			return;
-		
-		FactionManager factionManager = GetGame().GetFactionManager();
-		vector roomPosition = GetOrCreateRoomPosition(roomId, factionManager.GetFactionIndex(factionManager.GetFactionByKey(factionKey)));
-		
+
 		// Get global stuff
 		PlayerManager playerManager = GetGame().GetPlayerManager();
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
 		PS_GameModeCoop gameMode = PS_GameModeCoop.Cast(GetGame().GetGameMode());
 		PlayerController playerController = playerManager.GetPlayerController(playerId);
-		
+
 		if (playerController)
 		{
 			PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
 			SCR_EGameModeState state = gameMode.GetState();
-			
-			// Channel VoN switch
+
+			// Set radio encryption key based on room context
 			if (roomName.StartsWith("#PS-VoNRoom_Local"))
 			{
-				// We need silence
 				playableController.SetVoNKey(roomName, roomId.ToString());
 			} else if (state == SCR_EGameModeState.GAME) {
 				playableController.SetVoNKey("Menu" + factionKey + roomName, roomId.ToString());
-			} else if (state == SCR_EGameModeState.BRIEFING) { // On briefing also separate to squads
-				// May be reworked later
+			} else if (state == SCR_EGameModeState.BRIEFING) {
 				RplId playableId = playableManager.GetPlayableByPlayer(playerId);
 				int GroupCallSign = playableManager.GetGroupCallsignByPlayable(playableId);
 				playableController.SetVoNKey("Menu" + factionKey + GroupCallSign.ToString(), roomId.ToString());
 			}
-			else playableController.SetVoNKey("Menu" + factionKey, roomId.ToString()); // Сhange VoN zone
+			else playableController.SetVoNKey("Menu" + factionKey, roomId.ToString());
 		}
-		
-		// Finally move client to room
-		RPC_MoveToRoom(playerId, roomId, roomPosition);
-		Rpc(RPC_MoveToRoom, playerId, roomId, roomPosition);
+
+		// Update room assignment on all clients
+		RPC_MoveToRoom(playerId, roomId);
+		Rpc(RPC_MoveToRoom, playerId, roomId);
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	void RPC_MoveToRoom(int playerId, int roomId, vector position)
+	void RPC_MoveToRoom(int playerId, int roomId)
 	{
 		int oldRoomId = GetPlayerRoom(playerId);
-		
 		m_mPlayersRooms[playerId] = roomId;
-		
 		m_eOnRoomChanged.Invoke(playerId, roomId, oldRoomId);
-		
-		PlayerController playerController = GetGame().GetPlayerController();
-		if (!playerController) return;
-		if (playerController.GetPlayerId() != playerId) return;
-		
-		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
-		playableController.SetVoNPosition(position);
 	}
 	void RestoreRoom(int playerId)
 	{
 		int roomId = GetPlayerRoom(playerId);
 		if (roomId == -1) return;
-		
+
 		string roomKey = GetRoomName(roomId);
-		// TODO: separate to static method
 		string factionKey = "";
-		string roomName = "#PS-VoNRoom_Global";	
+		string roomName = "#PS-VoNRoom_Global";
 		if (roomKey.Contains("|")) {
 			array<string> outTokens = new array<string>();
 			roomKey.Split("|", outTokens, false);
 			factionKey = outTokens[0];
 			roomName = outTokens[1];
 		}
-		
-		FactionManager factionManager = GetGame().GetFactionManager();
-		vector roomPosition = GetOrCreateRoomPosition(roomId, factionManager.GetFactionIndex(factionManager.GetFactionByKey(factionKey)));
-		
-		RPC_MoveToRoom(playerId, roomId, roomPosition);
-		Rpc(RPC_MoveToRoom, playerId, roomId, roomPosition);
+
+		// Re-apply encryption key and broadcast room assignment
+		MoveToRoom(playerId, factionKey, roomName);
 	}
 	
 	// ------------------------- Room creation -------------------------
@@ -177,16 +153,6 @@ class PS_VoNRoomsManager : ScriptComponent
 	{
 		m_mVoiceRoomsFromName[roomKey] = roomId;
 		m_mVoiceRooms[roomId] = roomKey;
-	}
-	
-	// Create position if new roomId provided
-	vector GetOrCreateRoomPosition(int roomId, int factionIndex)
-	{
-		if (!m_mRoomOffsets.Contains(roomId)) {
-			lastOffset = lastOffset + lastOffset.Up * 100;
-			m_mRoomOffsets[roomId] = roomInitialPosition + lastOffset;
-		}
-		return m_mRoomOffsets[roomId];
 	}
 	
 	// ------------------------- Get -------------------------
@@ -272,6 +238,16 @@ class PS_VoNRoomsManager : ScriptComponent
 		return playerRoomName.StartsWith("|#PS-VoNRoom_Local");
 	}
 	
+	// Remap player ID in room assignments (called during reconnect ID remapping)
+	void RemapPlayerId(int oldPlayerId, int newPlayerId)
+	{
+		if (m_mPlayersRooms.Contains(oldPlayerId))
+		{
+			m_mPlayersRooms[newPlayerId] = m_mPlayersRooms[oldPlayerId];
+			m_mPlayersRooms.Remove(oldPlayerId);
+		}
+	}
+
 	// ------------------------- JIP Replication -------------------------
 	// Send our precision data, we need it on clients
 	override bool RplSave(ScriptBitWriter writer)

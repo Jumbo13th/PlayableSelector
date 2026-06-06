@@ -180,7 +180,7 @@ class PS_AlivePlayerSelector : SCR_ButtonBaseComponent
 			contextMenu.ActionDetachFrom(character).Insert(OnActionDetachFrom);
 		contextMenu.ActionLookAt(character).Insert(OnActionLookAt);
 		contextMenu.ActionFirstPersonView(character).Insert(OnActionFirstPersonView);
-		contextMenu.ActionRespawnInPlace(playableComponent.GetId(), playerId);
+		contextMenu.ActionRespawnInPlace(playableComponent.GetRplId(), playerId);
 		if (playerId > 0)
 		{
 			contextMenu.ActionDirectMessage(playerId);

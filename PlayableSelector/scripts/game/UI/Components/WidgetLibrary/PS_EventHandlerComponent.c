@@ -40,7 +40,9 @@ class PS_EventHandlerComponent : ScriptedWidgetComponent
 	}
 	
 	//------------------------------------------------------------------------------------------------
-	override bool OnChange(Widget w, bool finished)
+	// OnChange became a non-overridable event in 1.7
+	// TODO: Subscribe to widget OnChange event in HandlerAttached when 1.7 event API is known
+	/*override bool OnChange(Widget w, bool finished)
 	{
 		if (m_OnChange)
 			m_OnChange.Invoke(w);
@@ -49,7 +51,7 @@ class PS_EventHandlerComponent : ScriptedWidgetComponent
 			m_OnChangeFinal.Invoke(w);
 
 		return false;
-	}
+	}*/
 
 	//------------------------------------------------------------------------------------------------
 	override bool OnMouseEnter(Widget w, int x, int y)

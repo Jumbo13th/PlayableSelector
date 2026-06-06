@@ -1,9 +1,9 @@
 GameProject {
- ID "ReforgerLobby"
- GUID "5EAF2B0473DB5A99"
- TITLE "Reforger Lobby"
+ ID "ReforgerLobbyEnhanced"
+ GUID "7C85C3B285F44AB8"
+ TITLE "Reforger Lobby Enhanced"
  Dependencies {
-  "58D0FB3206B6F859" "1337133713371337"
+  "58D0FB3206B6F859" "5BA504A5BC934CC2"
  }
  Configurations {
   GameProjectConfig PC {

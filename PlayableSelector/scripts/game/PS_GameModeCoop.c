@@ -164,8 +164,11 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		{
 			PS_VoNRoomsManager.GetInstance().GetOrCreateRoomWithFaction("", "#PS-VoNRoom_Global");
 
-			m_fCurrentFreezeTime = m_iReconnectTime;
-			Replication.BumpMe();
+			if (m_fCurrentFreezeTime != m_iReconnectTime)
+			{
+				m_fCurrentFreezeTime = m_iReconnectTime;
+				Replication.BumpMe();
+			}
 		}
 
 		if (RplSession.Mode() != RplMode.Dedicated) {
@@ -547,6 +550,36 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	{
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
 		string name = GetGame().GetPlayerManager().GetPlayerName(playerId);
+
+		// Check if this is a reconnecting player (GUID matches a disconnected player)
+		int oldPlayerId = playableManager.TryHandleReconnect(playerId);
+		if (oldPlayerId >= 0)
+		{
+			// Reconnect detected — cancel the pending slot removal for the old ID
+			GetGame().GetCallqueue().Remove(RemoveDisconnectedPlayer);
+
+			// Update the player name under the new ID
+			playableManager.SetPlayerName(playerId, name);
+
+			// Spawn initial entity and restore VoN room (same as normal connect)
+			#ifdef WORKBENCH
+			GetGame().GetCallqueue().CallLater(SpawnInitialEntity, 500, false, playerId);
+			#else
+			GetGame().GetCallqueue().CallLater(SpawnInitialEntity, 100, false, playerId);
+			#endif
+
+			// If we're in GAME state, re-apply the player to their slot
+			if (GetState() == SCR_EGameModeState.GAME)
+			{
+				GetGame().GetCallqueue().CallLater(ReapplyReconnectedPlayer, 200, false, playerId);
+			}
+
+			m_OnPlayerConnected.Invoke(playerId);
+			return;
+		}
+
+		// Normal connect (not a reconnect)
+		playableManager.TrackPlayerGUID(playerId);
 		playableManager.SetPlayerName(playerId, name);
 
 		// TODO: remove CallLater
@@ -556,6 +589,30 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		GetGame().GetCallqueue().CallLater(SpawnInitialEntity, 100, false, playerId);
 		#endif
 		m_OnPlayerConnected.Invoke(playerId);
+	}
+
+	// Re-apply a reconnected player to their preserved slot
+	protected void ReapplyReconnectedPlayer(int playerId)
+	{
+		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
+		RplId playableId = playableManager.GetPlayableByPlayer(playerId);
+		if (playableId == RplId.Invalid())
+			return;
+
+		PS_PlayableContainer playableContainer = playableManager.GetPlayableById(playableId);
+		if (!playableContainer)
+			return;
+
+		// If the character is destroyed, switch to spectator instead
+		if (playableContainer.GetDamageState() == EDamageState.DESTROYED)
+		{
+			SwitchToInitialEntity(playerId);
+			return;
+		}
+
+		// Re-apply the playable and force the client to switch
+		playableManager.SetPlayerState(playerId, PS_EPlayableControllerState.Playing);
+		playableManager.ApplyPlayable(playerId);
 	}
 
 	protected override bool HandlePlayerKilled(int playerId, IEntity playerEntity, IEntity killerEntity, notnull Instigator killer)
@@ -573,6 +630,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
 
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
+		playableManager.TrackPlayerDisconnect(playerId);
 		playableManager.SetPlayerState(playerId, PS_EPlayableControllerState.Disconected);
 		if (m_iReconnectTime > 0) GetGame().GetCallqueue().CallLater(RemoveDisconnectedPlayer, m_iReconnectTime, false, playerId);
 
@@ -592,15 +650,8 @@ class PS_GameModeCoop : SCR_BaseGameMode
 
 		// RespawnSystemComponent is not a SCR_BaseGameModeComponent, so for now we have to
 		// propagate these events manually.
-		if (IsMaster())
+		if (IsMaster() && m_pRespawnSystemComponent)
 			m_pRespawnSystemComponent.OnPlayerDisconnected_S(playerId, cause, timeout);
-
-		foreach (SCR_BaseGameModeComponent comp : m_aAdditionalGamemodeComponents)
-		{
-			comp.OnPlayerDisconnected(playerId, cause, timeout);
-		}
-
-		m_OnPostCompPlayerDisconnected.Invoke(playerId, cause, timeout);
 
 		if (IsMaster())
 		{
@@ -616,7 +667,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 							charController.SetMovement(0, vector.Forward);
 						}
 
-						CompartmentAccessComponent compAccess = CompartmentAccessComponent.Cast(controlledEntity.FindComponent(CompartmentAccessComponent)); // TODO nullcheck
+						CompartmentAccessComponent compAccess = CompartmentAccessComponent.Cast(controlledEntity.FindComponent(CompartmentAccessComponent));
 						if (compAccess)
 						{
 							BaseCompartmentSlot compartment = compAccess.GetCompartment();
@@ -726,19 +777,38 @@ class PS_GameModeCoop : SCR_BaseGameMode
 			return;
 		#endif
 
+		// Check if player is still connected before spawning
+		PlayerManager playerManager = GetGame().GetPlayerManager();
+		if (!playerManager.IsPlayerConnected(playerId))
+			return;
+
+		SCR_PlayerController playerController = SCR_PlayerController.Cast(playerManager.GetPlayerController(playerId));
+		if (!playerController)
+			return;
+
+		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
+		if (!playableController)
+			return;
+
 		PS_VoNRoomsManager VoNRoomsManager = PS_VoNRoomsManager.GetInstance();
 		Resource resource = Resource.Load("{ADDE38E4119816AB}Prefabs/InitialPlayer_Version2.et");
 		EntitySpawnParams params = new EntitySpawnParams();
-		GetTransform(params.Transform);
-		vector position = Vector(0, 100000, 0) + Vector(1000 * Math.Mod(playerId, 10), 5000 * Math.Floor(Math.Mod(playerId, 100) / 10), 5000 * Math.Floor(playerId / 100));
-		params.Transform[3] = position;
+		Math3D.MatrixIdentity4(params.Transform);
+		// Unique position per player — prevents direct VoN proximity bleed.
+		// Radio VoN is isolated by encryption keys, but direct VoN uses proximity only.
+		// Base offset (5000, 0, 5000) moves away from map corner to avoid ocean ambient sounds.
+		params.Transform[3] = Vector(5000, 100000, 5000) + Vector(1000 * Math.Mod(playerId, 10), 5000 * Math.Floor(Math.Mod(playerId, 100) / 10), 5000 * Math.Floor(playerId / 100));
 		IEntity initialEntity = GetGame().SpawnEntityPrefab(resource, GetGame().GetWorld(), params);
-		PlayerManager playerManager = GetGame().GetPlayerManager();
-		SCR_PlayerController playerController = SCR_PlayerController.Cast(playerManager.GetPlayerController(playerId));
-		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
-		playableController.SetInitialEntity(initialEntity);
+		playableController.SetInitialEntity(initialEntity); // Also deactivates physics
 		playerController.SetInitialMainEntity(initialEntity);
 		VoNRoomsManager.RestoreRoom(playerId);
+
+		// If player has no room yet (new connection, not a reconnect),
+		// assign to global room so their encryption key isolates VoN.
+		// Without this, all initial entities share the same position
+		// and unkeyed radios could bleed into each other.
+		if (VoNRoomsManager.GetPlayerRoom(playerId) == -1)
+			VoNRoomsManager.MoveToRoom(playerId, "", "#PS-VoNRoom_Global");
 	}
 
 	void TryRespawn(RplId playableId, int playerId)
@@ -820,10 +890,10 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	{
 		if (playerId <= 0)
 			return;
-		PlayerManager playerManager = GetGame().GetPlayerManager();
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
 		playableManager.SetPlayerPlayable(playerId, RplId.Invalid());
-		playableManager.ApplyPlayable(playerId);
+		// Delay entity spawn so state RPCs settle before entity ownership change
+		GetGame().GetCallqueue().CallLater(playableManager.ApplyPlayable, 200, false, playerId);
 	}
 
 	// If after m_iReconnectTime player still disconnected release playable
@@ -841,36 +911,52 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	{
 		super.OnGameStateChanged();
 
-		PS_VoNRoomsManager VoNRoomsManager = PS_VoNRoomsManager.GetInstance();
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
-		array<int> playerIds = new array<int>();
-		GetGame().GetPlayerManager().GetPlayers(playerIds);
 
 		SCR_EGameModeState state = GetState();
 		m_OnGameStateChange.Invoke(state);
 		switch (state)
 		{
 			case SCR_EGameModeState.BRIEFING: // Force move to voice rooms
-				foreach (int playerId : playerIds)
+				// Stagger VoN room moves to avoid flooding with Reliable Broadcast RPCs
+				array<int> playerIds = new array<int>();
+				GetGame().GetPlayerManager().GetPlayers(playerIds);
+				for (int i = 0; i < playerIds.Count(); i++)
 				{
-					RplId playableId = playableManager.GetPlayableByPlayer(playerId);
-					if (playableId == RplId.Invalid())
-					{
-						playableManager.SetPlayerFactionKey(playerId, "");
-						VoNRoomsManager.MoveToRoom(playerId, "", "#PS-VoNRoom_Global");
-					}else{
-						if (playableManager.IsPlayerGroupLeader(playerId) || m_bPublicCommandBriefing)
-						{
-							VoNRoomsManager.MoveToRoom(playerId, playableManager.GetPlayerFactionKey(playerId), "#PS-VoNRoom_Command");
-						} else {
-							string groupName = playableManager.GetGroupCallsignByPlayable(playableId).ToString();
-							VoNRoomsManager.MoveToRoom(playerId, playableManager.GetPlayerFactionKey(playerId), groupName);
-						}
-					}
+					// Spread room moves: 50ms apart per player to avoid burst
+					GetGame().GetCallqueue().CallLater(MovePlayerToVoNRoom, i * 50, false, playerIds[i]);
 				}
 				if (m_bHolsterWeapon)
 					playableManager.HolsterWeapons();
 				break;
+		}
+	}
+
+	// Staggered VoN room move for a single player during BRIEFING transition
+	protected void MovePlayerToVoNRoom(int playerId)
+	{
+		PS_VoNRoomsManager VoNRoomsManager = PS_VoNRoomsManager.GetInstance();
+		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
+		if (!VoNRoomsManager || !playableManager)
+			return;
+
+		RplId playableId = playableManager.GetPlayableByPlayer(playerId);
+		if (playableId == RplId.Invalid())
+		{
+			playableManager.SetPlayerFactionKey(playerId, "");
+			VoNRoomsManager.MoveToRoom(playerId, "", "#PS-VoNRoom_Global");
+		}
+		else
+		{
+			if (playableManager.IsPlayerGroupLeader(playerId) || m_bPublicCommandBriefing)
+			{
+				VoNRoomsManager.MoveToRoom(playerId, playableManager.GetPlayerFactionKey(playerId), "#PS-VoNRoom_Command");
+			}
+			else
+			{
+				string groupName = playableManager.GetGroupCallsignByPlayable(playableId).ToString();
+				VoNRoomsManager.MoveToRoom(playerId, playableManager.GetPlayerFactionKey(playerId), groupName);
+			}
 		}
 	}
 
@@ -959,7 +1045,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		freezeTime -= time;
 
 		m_fCurrentFreezeTime = freezeTime;
-		Replication.BumpMe();
+		// RPC handles client-side UI update; no BumpMe needed per tick
 
 		// Show timer on clients synced to server
 		if (RplSession.Mode() != RplMode.Dedicated) RPC_restrictedZonesTimer(freezeTime);
@@ -970,7 +1056,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		{
 			m_fGameStartTime = GetGame().GetWorld().GetWorldTime();
 			m_fGameStartElapsedTime = GetElapsedTime();
-			Replication.BumpMe();
+			Replication.BumpMe(); // Sync game start time and freeze state for JIP clients
 			removeRestrictedZones();
 			if (m_bDisableBuildingModeAfterFreezeTime)
 				DisableBuildingMode();
@@ -981,6 +1067,9 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
 	void RPC_restrictedZonesTimer(int freezeTime)
 	{
+		// Keep client-side freeze time in sync for IsFreezeTimeEnd() etc.
+		m_fCurrentFreezeTime = freezeTime;
+
 		if (freezeTime <= 0)
 		{
 			if (m_hFreezeTimeCounter)

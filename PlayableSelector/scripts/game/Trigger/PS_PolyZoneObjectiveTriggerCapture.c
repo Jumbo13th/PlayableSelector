@@ -20,7 +20,11 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 	
 	ref map<FactionKey, int> m_mFactionCounters = new map<FactionKey, int>();
 	ref map<FactionKey, float> m_mFactionTimers = new map<FactionKey, float>();
-	
+
+	// Throttle timer sync to avoid flooding the network
+	protected float m_fTimerSyncAccumulator = 0;
+	protected static const float TIMER_SYNC_INTERVAL = 0.5; // Sync every 0.5 seconds
+
 	override void OnInit(IEntity owner)
 	{
 		super.OnInit(owner);
@@ -64,9 +68,15 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 	{
 		if (!Replication.IsServer())
 			return;
-		
-		UpdateFactionTimers();
-		
+
+		// Sync timers to clients at a throttled rate instead of every frame
+		m_fTimerSyncAccumulator += timeSlice;
+		if (m_fTimerSyncAccumulator >= TIMER_SYNC_INTERVAL)
+		{
+			m_fTimerSyncAccumulator = 0;
+			SyncFactionTimers();
+		}
+
 		int maxDiff = 0;
 		int maxCount = 0;
 		FactionKey maxFaction = "";
@@ -113,17 +123,27 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 		}
 	}
 	
-	void UpdateFactionTimers()
+	// Batch-sync all faction timers in a single RPC at a throttled rate
+	void SyncFactionTimers()
 	{
+		array<FactionKey> keys = {};
+		array<float> values = {};
 		foreach (FactionKey factionKey, float timer : m_mFactionTimers)
 		{
-			Rpc(RPC_UpdateFactionTimers, factionKey, timer);
+			keys.Insert(factionKey);
+			values.Insert(timer);
 		}
+		Rpc(RPC_SyncFactionTimers, keys, values);
+		if (RplSession.Mode() != RplMode.Dedicated)
+			RPC_SyncFactionTimers(keys, values);
 	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	void RPC_UpdateFactionTimers(FactionKey factionKey, float timer)
+	[RplRpc(RplChannel.Unreliable, RplRcver.Broadcast)]
+	void RPC_SyncFactionTimers(array<FactionKey> keys, array<float> values)
 	{
-		m_mFactionTimers[factionKey] = timer;
+		for (int i = 0; i < keys.Count(); i++)
+		{
+			m_mFactionTimers[keys[i]] = values[i];
+		}
 	}
 	
 	override bool ScriptedEntityFilterForQuery(IEntity ent)

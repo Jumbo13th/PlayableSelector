@@ -54,6 +54,11 @@ class PS_PlayableManager : ScriptComponent
 	ref map<RplId, string> m_mPlayablePrefabs = new map<RplId, string>();
 	ref map<RplId, string> m_mPlayableNames = new map<RplId, string>();
 
+	// Server-only GUID tracking for reconnect player ID remapping
+	protected ref map<string, int> m_mGUIDtoPlayerId = new map<string, int>();   // GUID -> current playerId
+	protected ref map<int, string> m_mPlayerIdToGUID = new map<int, string>();   // playerId -> GUID
+	protected ref map<string, int> m_mDisconnectedGUIDs = new map<string, int>(); // GUID -> old playerId (for disconnected players)
+
 	// Invokers
 	ref ScriptInvokerInt m_eOnPlayerConnected = new ScriptInvokerInt();
 	ScriptInvokerInt GetOnPlayerConnected()
@@ -120,6 +125,10 @@ class PS_PlayableManager : ScriptComponent
 	static protected PS_PlayableControllerComponent s_CurrentPlayableController;
 
 	protected static PS_PlayableManager s_Instance;
+
+	// Registration queue to stagger playable registrations and avoid RPC burst at init
+	protected ref array<PS_PlayableComponent> m_aRegistrationQueue = {};
+	protected static const int REGISTRATION_INTERVAL_MS = 50; // 50ms between registrations
 
 	[RplProp()]
 	int m_iMaxPlayersCount = 1; // Max players count from server config
@@ -201,8 +210,12 @@ class PS_PlayableManager : ScriptComponent
 		DSSession dSSession = GetGame().GetBackendApi().GetDSSession();
 		if (dSSession)
 		{
-			m_iMaxPlayersCount = dSSession.PlayerLimit();
-			Replication.BumpMe();
+			int playerLimit = dSSession.PlayerLimit();
+			if (m_iMaxPlayersCount != playerLimit)
+			{
+				m_iMaxPlayersCount = playerLimit;
+				Replication.BumpMe();
+			}
 		}
 		else
 			m_CallQueue.Call(ForceGetSessionMaxPlayersCount); // Loading take some time, awaiting valid config
@@ -236,11 +249,13 @@ class PS_PlayableManager : ScriptComponent
 
 		IEntity entity;
 		if (playableId == RplId.Invalid()) { // switch to null entity
-			// Remove group and faction
+			// Remove group
 			SCR_AIGroup currentGroup = groupsManagerComponent.GetPlayerGroup(playableId);
 			if (currentGroup)
 				currentGroup.RemovePlayer(playerId);
-			SetPlayerFactionKey(playerId, "");
+
+			// Defer faction clear to spread RPC load during death transitions
+			m_CallQueue.CallLater(SetPlayerFactionKey, 200, false, playerId, "");
 
 			// Create new entity if need
 			entity = playableController.GetInitialEntity();
@@ -248,6 +263,8 @@ class PS_PlayableManager : ScriptComponent
 			{
 				Resource resource = Resource.Load("{ADDE38E4119816AB}Prefabs/InitialPlayer_Version2.et");
 				EntitySpawnParams params = new EntitySpawnParams();
+				Math3D.MatrixIdentity4(params.Transform);
+				params.Transform[3] = Vector(5000, 100000, 5000) + Vector(1000 * Math.Mod(playerId, 10), 5000 * Math.Floor(Math.Mod(playerId, 100) / 10), 5000 * Math.Floor(playerId / 100));
 				entity = GetGame().SpawnEntityPrefab(resource, GetGame().GetWorld(), params);
 				playableController.SetInitialEntity(entity);
 			}
@@ -331,6 +348,50 @@ class PS_PlayableManager : ScriptComponent
 		SCR_ChimeraCharacter playableCharacter = playableComponent.GetCharacter();
 		if (!playableCharacter.PS_GetChimeraAIControlComponent())
 			return;
+
+		// Queue registration to stagger RPCs and avoid network burst at init
+		m_aRegistrationQueue.Insert(playableComponent);
+		if (m_aRegistrationQueue.Count() == 1)
+			m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
+	}
+
+	// Process one queued registration per tick, staggering RPCs over time
+	protected void ProcessRegistrationQueue()
+	{
+		if (m_aRegistrationQueue.IsEmpty())
+			return;
+
+		PS_PlayableComponent playableComponent = m_aRegistrationQueue[0];
+		m_aRegistrationQueue.RemoveOrdered(0);
+
+		// Validate the component is still alive and valid
+		if (!playableComponent || !playableComponent.GetOwner())
+		{
+			if (!m_aRegistrationQueue.IsEmpty())
+				m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
+			return;
+		}
+
+		RplId playableId = playableComponent.GetRplId();
+		if (m_aPlayables.Contains(playableId)) // Already registered (could happen if queued twice)
+		{
+			if (!m_aRegistrationQueue.IsEmpty())
+				m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
+			return;
+		}
+
+		RegisterPlayableImmediate(playableComponent);
+
+		// Schedule next registration
+		if (!m_aRegistrationQueue.IsEmpty())
+			m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
+	}
+
+	// Actual registration logic (fires RPCs for one playable)
+	protected void RegisterPlayableImmediate(PS_PlayableComponent playableComponent)
+	{
+		RplId playableId = playableComponent.GetRplId();
+		SCR_ChimeraCharacter playableCharacter = playableComponent.GetCharacter();
 
 		// Save and replicate data
 		PS_PlayableContainer container = playableComponent.GetPlayableContainer();
@@ -560,7 +621,7 @@ class PS_PlayableManager : ScriptComponent
 		factionManager.UpdatePlayerFaction_S(playerFactionAffiliation);
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected protected void RPC_SetPlayerFactionKey(int playerId, FactionKey factionKey)
+	protected void RPC_SetPlayerFactionKey(int playerId, FactionKey factionKey)
 	{
 		FactionKey factionKeyOld = GetPlayerFactionKey(playerId);
 		m_playersFaction[playerId] = factionKey;
@@ -981,22 +1042,17 @@ class PS_PlayableManager : ScriptComponent
 	// --------------------------------------------------------------------------------------------
 	// ----------------------------------- Client requests ----------------------------------------
 	// --------------------------------------------------------------------------------------------
-	// Send message to player when he got kicked frop playable slot
+	// Send message to player when he got kicked from playable slot
 	void NotifyKick(int playerId)
 	{
-		RPC_NotifyKick(playerId);
-		Rpc(RPC_NotifyKick, playerId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_NotifyKick(int playerId)
-	{
-		PlayerController playerController = GetGame().GetPlayerController();
-		if (playerController && playerId == playerController.GetPlayerId())
-		{
-			SCR_ChatPanelManager chatPanelManager = SCR_ChatPanelManager.GetInstance();
-			ChatCommandInvoker invoker = chatPanelManager.GetCommandInvoker("lmsg");
-			invoker.Invoke(null, "#PS-Lobby_RoleKick");
-		}
+		// Route through the player's own controller for targeted Owner delivery
+		SCR_PlayerController playerController = SCR_PlayerController.Cast(m_PlayerManager.GetPlayerController(playerId));
+		if (!playerController)
+			return;
+		PS_PlayableControllerComponent playableController = playerController.PS_GetPLayableComponent();
+		if (!playableController)
+			return;
+		playableController.NotifyKickOwner();
 	}
 	
 	// --------------------------------------------------------------------------------------------
@@ -1004,20 +1060,14 @@ class PS_PlayableManager : ScriptComponent
 	// Or else player can stack in other menu
 	void ForceSwitch(int playerId)
 	{
-		// Send it ot everyone (TODO: Use owner)
-		RPC_ForceSwitch(playerId);
-		Rpc(RPC_ForceSwitch, playerId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_ForceSwitch(int playerId)
-	{
-		// Check is it our id
-		PlayerController playerController = GetGame().GetPlayerController();
-		if (!playerController || playerController.GetPlayerId() != playerId)
+		// Route through the player's own controller for targeted Owner delivery
+		SCR_PlayerController playerController = SCR_PlayerController.Cast(m_PlayerManager.GetPlayerController(playerId));
+		if (!playerController)
 			return;
-
-		// Do full GAME state enter logic
-		s_CurrentPlayableController.SwitchToMenu(SCR_EGameModeState.GAME);
+		PS_PlayableControllerComponent playableController = playerController.PS_GetPLayableComponent();
+		if (!playableController)
+			return;
+		playableController.SwitchToMenuServer(SCR_EGameModeState.GAME);
 	}
 
 
@@ -1061,13 +1111,118 @@ class PS_PlayableManager : ScriptComponent
 	}
 
 	// --------------------------------------------------------------------------------------------
+	// -------------------------------- Reconnect ID remapping ------------------------------------
+	// --------------------------------------------------------------------------------------------
+	// Track player GUID on connect (server-only)
+	void TrackPlayerGUID(int playerId)
+	{
+		if (!Replication.IsServer())
+			return;
+
+		string guid = GetGame().GetBackendApi().GetPlayerIdentityId(playerId);
+		if (guid == "")
+			return;
+
+		m_mGUIDtoPlayerId[guid] = playerId;
+		m_mPlayerIdToGUID[playerId] = guid;
+	}
+
+	// Mark player as disconnected for GUID-based reconnect (server-only)
+	void TrackPlayerDisconnect(int playerId)
+	{
+		if (!Replication.IsServer())
+			return;
+
+		string guid;
+		if (!m_mPlayerIdToGUID.Find(playerId, guid))
+			return;
+
+		m_mDisconnectedGUIDs[guid] = playerId;
+	}
+
+	// Check if a connecting player is a reconnect. Returns old playerId or -1 if not a reconnect.
+	// If reconnect detected, remaps all maps from oldId to newId. (server-only)
+	int TryHandleReconnect(int newPlayerId)
+	{
+		if (!Replication.IsServer())
+			return -1;
+
+		string guid = GetGame().GetBackendApi().GetPlayerIdentityId(newPlayerId);
+		if (guid == "")
+			return -1;
+
+		int oldPlayerId;
+		if (!m_mDisconnectedGUIDs.Find(guid, oldPlayerId))
+			return -1;
+
+		// Found a reconnect — clean up disconnect tracking
+		m_mDisconnectedGUIDs.Remove(guid);
+
+		// Update GUID tracking to new player ID
+		m_mGUIDtoPlayerId[guid] = newPlayerId;
+		m_mPlayerIdToGUID.Remove(oldPlayerId);
+		m_mPlayerIdToGUID[newPlayerId] = guid;
+
+		// Remap all maps if player ID changed
+		if (oldPlayerId != newPlayerId)
+		{
+			RemapPlayerIds(oldPlayerId, newPlayerId);
+		}
+
+		return oldPlayerId;
+	}
+
+	// Remap all player-ID-keyed maps from oldId to newId, broadcast to all clients
+	protected void RemapPlayerIds(int oldPlayerId, int newPlayerId)
+	{
+		RPC_RemapPlayerIds(oldPlayerId, newPlayerId);
+		Rpc(RPC_RemapPlayerIds, oldPlayerId, newPlayerId);
+	}
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_RemapPlayerIds(int oldPlayerId, int newPlayerId)
+	{
+		// Remap player-ID-keyed maps (key = playerId)
+		RemapKeyInt(m_playersStates, oldPlayerId, newPlayerId);
+		RemapKeyInt(m_playersPlayable, oldPlayerId, newPlayerId);
+		RemapKeyInt(m_playersPlayableRemembered, oldPlayerId, newPlayerId);
+		RemapKeyInt(m_playersPin, oldPlayerId, newPlayerId);
+		RemapKeyInt(m_playersFaction, oldPlayerId, newPlayerId);
+		RemapKeyInt(m_playersFactionRemembered, oldPlayerId, newPlayerId);
+		RemapKeyInt(m_playersLastName, oldPlayerId, newPlayerId);
+
+		// Remap RplId-keyed maps where player ID is the VALUE
+		foreach (RplId rplId, int pid : m_playablePlayers)
+		{
+			if (pid == oldPlayerId)
+				m_playablePlayers[rplId] = newPlayerId;
+		}
+		foreach (RplId rplId, int pid : m_playablePlayersRemembered)
+		{
+			if (pid == oldPlayerId)
+				m_playablePlayersRemembered[rplId] = newPlayerId;
+		}
+
+		// Remap VoN room assignment
+		PS_VoNRoomsManager vonManager = PS_VoNRoomsManager.GetInstance();
+		if (vonManager)
+			vonManager.RemapPlayerId(oldPlayerId, newPlayerId);
+	}
+
+	// Helper: remap a key in any int-keyed map
+	private void RemapKeyInt(map<int, PS_EPlayableControllerState> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
+	private void RemapKeyInt(map<int, RplId> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
+	private void RemapKeyInt(map<int, bool> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
+	private void RemapKeyInt(map<int, FactionKey> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
+	private void RemapKeyInt(map<int, string> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
+
+	// --------------------------------------------------------------------------------------------
 	// Manually replicate and invoke damage state change event on all clients and server
 	void OnPlayableDamageStateChanged(RplId playableId, EDamageState damageState)
 	{
 		Rpc(RPC_OnPlayableDamageStateChanged, playableId, damageState);
 		RPC_OnPlayableDamageStateChanged(playableId, damageState);
 	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	[RplRpc(RplChannel.Unreliable, RplRcver.Broadcast)]
 	protected void RPC_OnPlayableDamageStateChanged(RplId playableId, EDamageState damageState)
 	{
 		if (!m_aPlayables.Contains(playableId))
@@ -1247,6 +1402,24 @@ class PS_PlayableManager : ScriptComponent
 	// --------------------------------------------------------------------------------------------
 	override protected bool RplLoad(ScriptBitReader reader)
 	{
+		// Clear existing data to prevent duplicates on re-stream
+		m_playersStates.Clear();
+		m_playersPlayable.Clear();
+		m_playablePlayers.Clear();
+		m_playersPin.Clear();
+		m_playersFaction.Clear();
+		m_playersFactionRemembered.Clear();
+		m_playablePlayerGroupId.Clear();
+		m_playersLastName.Clear();
+		m_playersPlayableRemembered.Clear();
+		m_playablePlayersRemembered.Clear();
+		m_mFactionReady.Clear();
+		m_mPlayablePrefabs.Clear();
+		m_mPlayableNames.Clear();
+		m_aPlayables.Clear();
+		m_aPlayablesSorted.Clear();
+		m_mPlayableVehicles.Clear();
+
 		// Load maps
 		PS_ReplicationHelper.ReadMapIntInt(reader, m_playersStates);
 		PS_ReplicationHelper.ReadMapIntRplId(reader, m_playersPlayable);
