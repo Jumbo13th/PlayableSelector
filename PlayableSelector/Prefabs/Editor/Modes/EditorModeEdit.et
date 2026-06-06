@@ -5,25 +5,6 @@ SCR_EditorModeEntity : "{E56F54E533ACE527}Prefabs/Editor/Modes/EditorModeBase.et
    m_ActionsLists {
     SCR_EditorActionList "{54B2AA71F2ECD6D7}" {
      m_Actions {
-      PS_RespawnSelectedContextAction "{64A33B845BB33B3D}" {
-       m_Info SCR_UIInfo "{547A6A52C50F5C37}" {
-        Name "#PS-Editor_ContextAction_RespawnEntity_Name"
-        Description "#PS-Editor_ContextAction_RespawnEntity_Name"
-        Icon "{F680C0AF2011FA1F}UI/Textures/Icons/PS_Respawn_x64.edds"
-        IconSetName "Respawn"
-       }
-       m_iOrder 170
-       m_bIsServer 1
-      }
-      PS_DirectMessageSelectedContextAction "{64E6A9E8ACB73808}" {
-       m_Info SCR_UIInfo "{64E6A9E8B316AFB7}" {
-        Name "#PS-ContextAction_DirectMessage"
-        Description "#PS-ContextAction_DirectMessage"
-        Icon "{2EFEA2AF1F38E7F0}UI/Textures/Icons/icons_wrapperUI-64.imageset"
-        IconSetName "whisper"
-       }
-       m_iOrder 170
-      }
      }
     }
    }

@@ -28,8 +28,6 @@ PS_ManualCameraSpectator : "{D6DE32D1C0FCC1C7}Prefabs/Editor/Camera/ManualCamera
  }
  coords 0 0 0
  m_aComponents {
-  PS_AttachManualCameraObserverComponent "{52CC693B212FF1E7}" {
-  }
   SCR_RotateRollManualCameraComponent "{52CC693A99CF4271}" {
    m_bEnabled 1
   }

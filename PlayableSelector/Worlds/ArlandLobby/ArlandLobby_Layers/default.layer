@@ -17,24 +17,8 @@ SCR_AIWorld : "{01DC74137CFDDB6A}Prefabs/AI/SCR_AIWorld_Arland.et" {
 }
 PerceptionManager PerceptionManager1 : "{028DAEAD63E056BE}Prefabs/World/Game/PerceptionManager.et" {
 }
-PS_GameModeCoop PS_GameMode_Lobby1 : "{9C2001FE7A2F2281}Prefabs/MP/Modes/PS_GameMode_Lobby.et" {
- components {
-  SCR_RespawnSystemComponent "{56B2B4793051E7C9}" {
-   Enabled 0
-   components {
-    SCR_FreeSpawnHandlerComponent "{5CD2860C681CE021}" {
-     Enabled 0
-    }
-    SCR_PossessSpawnHandlerComponent "{5CD2D12697D089D4}" {
-     Enabled 0
-    }
-    SCR_SpawnPointSpawnHandlerComponent "{5CD2D126957998DF}" {
-     Enabled 0
-    }
-   }
-  }
- }
- m_bFreezeTimeShootingForbiden 1
+PS_GameModeCoop PS_GameMode_Lobby1 : "{1F384622559F50FE}Prefabs/MP/Modes/PS_GameMode_Lobby.et" {
+ coords 2006.446 63.9 1238.517
 }
 $grp SCR_AIGroup : "{107554618BE6FF20}Prefabs/Groups/BLUFOR/Group_US_Team_Suppress_P.et" {
  {

@@ -1,5 +1,5 @@
 MetaFileClass {
- Name "{9C2001FE7A2F2281}Prefabs/MP/Modes/PS_GameMode_Lobby.et"
+ Name "{1F384622559F50FE}Prefabs/MP/Modes/Editor/PS_GameMode_Editor.et"
  Configurations {
   EntityTemplateResourceClass PC {
   }
@@ -9,9 +9,9 @@ MetaFileClass {
   }
   EntityTemplateResourceClass PS4 : PC {
   }
-  EntityTemplateResourceClass HEADLESS : PC {
-  }
   EntityTemplateResourceClass PS5 : PC {
+  }
+  EntityTemplateResourceClass HEADLESS : PC {
   }
  }
 }
