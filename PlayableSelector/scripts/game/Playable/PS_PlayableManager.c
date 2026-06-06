@@ -188,6 +188,7 @@ class PS_PlayableManager : ScriptComponent
 
 	protected void OnPlayablesReplicated()
 	{
+		PS_LobbyMetrics.OnJipReceived(m_aPlayables.Count());
 		m_bRplLoaded = true;
 		UpdatePlayablesSorted();
 
@@ -206,7 +207,7 @@ class PS_PlayableManager : ScriptComponent
 			if (m_iMaxPlayersCount != playerLimit)
 			{
 				m_iMaxPlayersCount = playerLimit;
-				Replication.BumpMe();
+				Rpc(RPC_SyncMaxPlayers, m_iMaxPlayersCount);
 			}
 		}
 		else
@@ -221,14 +222,27 @@ class PS_PlayableManager : ScriptComponent
 	void StartTime()
 	{
 		m_iStartTimerCounter -= 1;
-		Replication.BumpMe();
-		OnStartTimerCounterChanged();
+		RPC_SyncStartTimer(m_iStartTimerCounter);
+		Rpc(RPC_SyncStartTimer, m_iStartTimerCounter);
 		if (m_iStartTimerCounter == 0)
 		{
 			PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
 			gameModeCoop.AdvanceGameState(SCR_EGameModeState.SLOTSELECTION);
 			m_CallQueue.Remove(StartTime);
 		}
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_SyncStartTimer(int value)
+	{
+		m_iStartTimerCounter = value;
+		OnStartTimerCounterChanged();
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_SyncMaxPlayers(int value)
+	{
+		m_iMaxPlayersCount = value;
 	}
 
 	// ============================================================================================
@@ -374,15 +388,12 @@ class PS_PlayableManager : ScriptComponent
 	protected void RegisterPlayableImmediate(PS_PlayableComponent playableComponent)
 	{
 		RplId playableId = playableComponent.GetRplId();
+		PS_LobbyMetrics.OnRegisterPlayable(playableId);
 		SCR_ChimeraCharacter playableCharacter = playableComponent.GetCharacter();
 
 		PS_PlayableContainer container = playableComponent.GetPlayableContainer();
-
-		RPC_RegisterPlayable(container);
-		Rpc(RPC_RegisterPlayable, container);
-
-		SetPlayablePrefab(playableId, playableComponent.GetOwner().GetPrefabData().GetPrefabName());
-
+		ResourceName prefab = playableComponent.GetOwner().GetPrefabData().GetPrefabName();
+		int groupId = -1;
 
 		if (Replication.IsServer())
 		{
@@ -410,17 +421,28 @@ class PS_PlayableManager : ScriptComponent
 			} else {
 				playerGroup = playableGroup.m_PlayersGroup;
 			}
-			SetPlayablePlayerGroupId(playableId, playerGroup.GetGroupID());
+			groupId = playerGroup.GetGroupID();
 			m_CallQueue.Call(UpdateGroupCallsign, playableId, playerGroup, playableGroup)
 		}
+
+		RPC_RegisterPlayable(container, prefab, groupId);
+		Rpc(RPC_RegisterPlayable, container, prefab, groupId);
 	}
 
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_RegisterPlayable(PS_PlayableContainer container)
+	protected void RPC_RegisterPlayable(PS_PlayableContainer container, ResourceName prefab, int groupId)
 	{
-		m_aPlayables.Set(container.GetRplId(), container);
+		RplId playableId = container.GetRplId();
+		m_aPlayables.Set(playableId, container);
+		m_mPlayablePrefabs.Set(playableId, prefab);
+		if (groupId >= 0)
+		{
+			m_playablePlayerGroupId.Set(playableId, groupId);
+			SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
+			m_eOnPlayableChangeGroup.Invoke(playableId, container, groupsManagerComponent.FindGroup(groupId));
+		}
 		UpdatePlayablesSortedDelayed();
-		m_CallQueue.Call(OnPlayableRegisteredLateInvoke, container.GetRplId(), container);
+		m_CallQueue.Call(OnPlayableRegisteredLateInvoke, playableId, container);
 	}
 
 	protected void OnPlayableRegisteredLateInvoke(RplId playableId, PS_PlayableContainer playableComponent)
@@ -463,6 +485,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void UnRegisterPlayable(RplId playableId)
 	{
+		PS_LobbyMetrics.OnUnregisterPlayable(playableId);
 		RPC_UnRegisterPlayable(playableId);
 		Rpc(RPC_UnRegisterPlayable, playableId);
 	}
@@ -504,6 +527,7 @@ class PS_PlayableManager : ScriptComponent
 			prefab = vehicle.GetPrefabData().GetPrefab().GetAncestor().GetAncestor().GetResourceName();
 		playableVehicleContainer.Init(rplId, prefab, uIInfo.GetIconPath(), groupCallsign, group.m_PlayersGroup.GetGroupID(), vehicleFactionAffiliationComponent.GetDefaultFactionKey());
 
+		PS_LobbyMetrics.OnRegisterVehicle(rplId);
 		Rpc(RPC_RegisterGroupVehicle, playableVehicleContainer);
 		RPC_RegisterGroupVehicle(playableVehicleContainer);
 	}
@@ -572,6 +596,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void SetPlayerFactionKey(int playerId, FactionKey factionKey)
 	{
+		PS_LobbyMetrics.OnSetFaction(playerId, factionKey);
 		RPC_SetPlayerFactionKey(playerId, factionKey);
 		Rpc(RPC_SetPlayerFactionKey, playerId, factionKey);
 
@@ -607,6 +632,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void SetPlayerState(int playerId, PS_EPlayableControllerState state)
 	{
+		PS_LobbyMetrics.OnSetPlayerState(playerId, state);
 		RPC_SetPlayerState(playerId, state);
 		Rpc(RPC_SetPlayerState, playerId, state);
 
@@ -629,8 +655,8 @@ class PS_PlayableManager : ScriptComponent
 					if (m_iStartTimerCounter != -1)
 					{
 						m_iStartTimerCounter = -1;
-						Replication.BumpMe();
-						OnStartTimerCounterChanged();
+						RPC_SyncStartTimer(m_iStartTimerCounter);
+						Rpc(RPC_SyncStartTimer, m_iStartTimerCounter);
 					}
 					return;
 				}
@@ -639,8 +665,8 @@ class PS_PlayableManager : ScriptComponent
 			if (adminExist)
 			{
 				m_iStartTimerCounter = 3;
-				Replication.BumpMe();
-				OnStartTimerCounterChanged();
+				RPC_SyncStartTimer(m_iStartTimerCounter);
+				Rpc(RPC_SyncStartTimer, m_iStartTimerCounter);
 				m_CallQueue.CallLater(StartTime, 1000, true);
 			}
 		}
@@ -673,6 +699,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void SetPlayerName(int playerId, string playerName)
 	{
+		PS_LobbyMetrics.OnSetPlayerName(playerId);
 		RPC_SetPlayerName(playerId, playerName);
 		Rpc(RPC_SetPlayerName, playerId, playerName);
 	}
@@ -697,6 +724,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void SetFactionReady(FactionKey factionKey, int readyValue)
 	{
+		PS_LobbyMetrics.OnSetFactionReady(factionKey, readyValue);
 		RPC_SetFactionReady(factionKey, readyValue);
 		Rpc(RPC_SetFactionReady, factionKey, readyValue);
 
@@ -897,6 +925,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void SetPlayablePlayerGroupId(RplId PlayableId, int groupId)
 	{
+		PS_LobbyMetrics.OnSetGroupId(PlayableId, groupId);
 		RPC_SetPlayablePlayerGroupId(PlayableId, groupId);
 		Rpc(RPC_SetPlayablePlayerGroupId, PlayableId, groupId);
 	}
@@ -939,6 +968,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void SetPlayerPin(int playerId, bool pined)
 	{
+		PS_LobbyMetrics.OnSetPin(playerId, pined);
 		RPC_SetPlayerPin(playerId, pined);
 		Rpc(RPC_SetPlayerPin, playerId, pined);
 	}
@@ -994,6 +1024,7 @@ class PS_PlayableManager : ScriptComponent
 
 	protected void OnPlayerConnected(int playerId)
 	{
+		PS_LobbyMetrics.OnPlayerConnected(playerId);
 		RplId playableId = GetPlayableByPlayer(playerId);
 		PS_PlayableContainer playableContainer = GetPlayableById(playableId);
 		if (playableContainer)
@@ -1002,6 +1033,7 @@ class PS_PlayableManager : ScriptComponent
 
 	protected void OnPlayerDisconnected(int playerId, KickCauseCode cause = KickCauseCode.NONE, int timeout = -1)
 	{
+		PS_LobbyMetrics.OnPlayerDisconnected(playerId, cause);
 		Rpc(RPC_OnPlayerDisconnected, playerId, cause, timeout);
 		RPC_OnPlayerDisconnected(playerId, cause, timeout);
 	}
@@ -1030,6 +1062,7 @@ class PS_PlayableManager : ScriptComponent
 
 	void OnPlayableDamageStateChanged(RplId playableId, EDamageState damageState)
 	{
+		PS_LobbyMetrics.OnDamageState(playableId, damageState);
 		Rpc(RPC_OnPlayableDamageStateChanged, playableId, damageState);
 		RPC_OnPlayableDamageStateChanged(playableId, damageState);
 	}
@@ -1092,6 +1125,7 @@ class PS_PlayableManager : ScriptComponent
 
 	protected void RemapPlayerIds(int oldPlayerId, int newPlayerId)
 	{
+		PS_LobbyMetrics.OnRemapPlayerIds(oldPlayerId, newPlayerId);
 		RPC_RemapPlayerIds(oldPlayerId, newPlayerId);
 		Rpc(RPC_RemapPlayerIds, oldPlayerId, newPlayerId);
 	}

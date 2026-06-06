@@ -1009,23 +1009,6 @@ class PS_PlayableControllerComponent : ScriptComponent
 	}
 
 	// -------------------- Atomic slot operations ---------------------
-	protected float m_fLastSlotActionTime = 0;
-	protected static const float SLOT_ACTION_COOLDOWN_MS = 200;
-
-	protected bool SlotThrottlePass()
-	{
-		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		PlayerManager playerManager = GetGame().GetPlayerManager();
-		if (SCR_Global.IsAdmin(thisPlayerController.GetPlayerId()))
-			return true;
-
-		float now = GetGame().GetWorld().GetWorldTime();
-		if (now - m_fLastSlotActionTime < SLOT_ACTION_COOLDOWN_MS)
-			return false;
-		m_fLastSlotActionTime = now;
-		return true;
-	}
-
 	void TakeSlot(int playerId, RplId playableId)
 	{
 		Rpc(RPC_TakeSlot, playerId, playableId);
@@ -1033,9 +1016,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
 	protected void RPC_TakeSlot(int playerId, RplId playableId)
 	{
-		if (!SlotThrottlePass())
-			return;
-
+		PS_LobbyMetrics.OnTakeSlot(playerId, playableId);
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
 		PlayerManager playerManager = GetGame().GetPlayerManager();
 		EPlayerRole playerRole = playerManager.GetPlayerRoles(thisPlayerController.GetPlayerId());
@@ -1083,9 +1064,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
 	protected void RPC_LeaveSlot(int playerId)
 	{
-		if (!SlotThrottlePass())
-			return;
-
+		PS_LobbyMetrics.OnLeaveSlot(playerId);
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
 		PlayerManager playerManager = GetGame().GetPlayerManager();
 		EPlayerRole playerRole = playerManager.GetPlayerRoles(thisPlayerController.GetPlayerId());

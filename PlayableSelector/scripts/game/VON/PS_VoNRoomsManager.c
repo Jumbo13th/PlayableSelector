@@ -14,7 +14,7 @@ class PS_VoNRoomsManager : ScriptComponent
 	// server-only reverse lookup
 	ref map<VoNRoomKey, int> m_mVoiceRoomsFromName = new map<VoNRoomKey, int>();
 
-	[RplProp()]
+	[RplProp(onRplName: "OnVoiceRoomsReplicated")]
 	ref PS_ReplicatedBasicMap<int, string> m_mVoiceRooms = new PS_ReplicatedBasicMap<int, string>();
 
 	[RplProp()]
@@ -28,6 +28,18 @@ class PS_VoNRoomsManager : ScriptComponent
 	bool IsReplicated()
 	{
 		return m_bRplLoaded;
+	}
+
+	protected void OnVoiceRoomsReplicated()
+	{
+		m_mVoiceRoomsFromName.Clear();
+		for (int i = 0; i < m_mVoiceRooms.Count(); i++)
+		{
+			int roomId = m_mVoiceRooms.GetKey(i);
+			string roomKey = m_mVoiceRooms.GetElement(i);
+			m_mVoiceRoomsFromName[roomKey] = roomId;
+		}
+		m_bRplLoaded = true;
 	}
 
 	override protected void OnPostInit(IEntity owner)
@@ -58,6 +70,7 @@ class PS_VoNRoomsManager : ScriptComponent
 	// ------------------------- Room changing -------------------------
 	void MoveToRoom(int playerId, FactionKey factionKey, string roomName)
 	{
+		PS_LobbyMetrics.OnMoveToRoom(playerId, roomName);
 		if (!Replication.IsServer()) return;
 
 		int roomId = GetOrCreateRoomWithFaction(factionKey, roomName);

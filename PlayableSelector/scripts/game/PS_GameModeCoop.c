@@ -625,6 +625,10 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	// Update state for disconnected and start timer if need (DO NOT DELETE CONTROLED ENTITY)
 	protected override void OnPlayerDisconnected(int playerId, KickCauseCode cause, int timeout)
 	{
+		string causeStr = cause.ToString();
+		if (causeStr.Contains("STALLED") || causeStr.Contains("FLOODED"))
+			PS_LobbyMetrics.DumpOnKick(playerId, causeStr);
+
 		PlayerManager playerManager = GetGame().GetPlayerManager();
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(playerManager.GetPlayerController(playerId));
 		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
@@ -914,6 +918,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
 
 		SCR_EGameModeState state = GetState();
+		PS_LobbyMetrics.OnGameStateChanged(typename.EnumToString(SCR_EGameModeState, state));
 		m_OnGameStateChange.Invoke(state);
 		switch (state)
 		{

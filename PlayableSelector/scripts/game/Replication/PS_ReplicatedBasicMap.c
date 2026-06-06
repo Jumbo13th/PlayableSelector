@@ -151,17 +151,14 @@ class PS_ReplicatedBasicMap<Class TKey, Class TValue>
 		if (countA != countB)
 			return false;
 
-		bool same = true;
 		for (int i = 0; i < countA; i++)
 		{
 			TKey key;
 			TValue val;
-			if (!PS_Comparator<TKey>.CompareSnap(lhs, rhs, key))
-				same = false;
-			if (!PS_Comparator<TValue>.CompareSnap(lhs, rhs, val))
-				same = false;
+			PS_Comparator<TKey>.CompareSnap(lhs, rhs, key);
+			PS_Comparator<TValue>.CompareSnap(lhs, rhs, val);
 		}
-		return same;
+		return true;
 	}
 
 	static bool PropCompare(PS_ReplicatedBasicMap<TKey, TValue> rplMap, SSnapSerializerBase snapshot, ScriptCtx ctx)
