@@ -34,147 +34,132 @@ class PS_PlayableManagerClass : ScriptComponentClass
 
 class PS_PlayableManager : ScriptComponent
 {
-	// Map of our playables
-	ref map<RplId, ref PS_PlayableContainer> m_aPlayables = new map<RplId, ref PS_PlayableContainer>(); // We NOW sync it!
+	// ============================================================================================
+	// ======================================= Replicated State ===================================
+	// ============================================================================================
+
+	[RplProp(onRplName: "OnPlayablesReplicated")]
+	ref PS_ReplicatedClassMap<RplId, ref PS_PlayableContainer> m_aPlayables = new PS_ReplicatedClassMap<RplId, ref PS_PlayableContainer>();
+
+	[RplProp()]
+	ref PS_ReplicatedClassMap<RplId, ref PS_PlayableVehicleContainer> m_mPlayableVehicles = new PS_ReplicatedClassMap<RplId, ref PS_PlayableVehicleContainer>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, int> m_playersStates = new PS_ReplicatedBasicMap<int, int>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, RplId> m_playersPlayable = new PS_ReplicatedBasicMap<int, RplId>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<RplId, int> m_playablePlayers = new PS_ReplicatedBasicMap<RplId, int>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, bool> m_playersPin = new PS_ReplicatedBasicMap<int, bool>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, FactionKey> m_playersFaction = new PS_ReplicatedBasicMap<int, FactionKey>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, FactionKey> m_playersFactionRemembered = new PS_ReplicatedBasicMap<int, FactionKey>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<RplId, int> m_playablePlayerGroupId = new PS_ReplicatedBasicMap<RplId, int>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, string> m_playersLastName = new PS_ReplicatedBasicMap<int, string>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<int, RplId> m_playersPlayableRemembered = new PS_ReplicatedBasicMap<int, RplId>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<RplId, int> m_playablePlayersRemembered = new PS_ReplicatedBasicMap<RplId, int>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<FactionKey, int> m_mFactionReady = new PS_ReplicatedBasicMap<FactionKey, int>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<RplId, string> m_mPlayablePrefabs = new PS_ReplicatedBasicMap<RplId, string>();
+
+	[RplProp()]
+	ref PS_ReplicatedBasicMap<RplId, string> m_mPlayableNames = new PS_ReplicatedBasicMap<RplId, string>();
+
+	[RplProp()]
+	int m_iMaxPlayersCount = 1;
+
+	[RplProp(onRplName: "OnStartTimerCounterChanged")]
+	int m_iStartTimerCounter = -1;
+
+	// ============================================================================================
+	// ======================================= Non-Replicated =====================================
+	// ============================================================================================
+
 	ref array<PS_PlayableContainer> m_aPlayablesSorted = {};
-	ref map<RplId, ref PS_PlayableVehicleContainer> m_mPlayableVehicles = new map<RplId, ref PS_PlayableVehicleContainer>();
 
-	// Maps for saving players staff, player controllers local to client
-	ref map<int, PS_EPlayableControllerState> m_playersStates = new map<int, PS_EPlayableControllerState>();
-	ref map<int, RplId> m_playersPlayableRemembered = new map<int, RplId>();
-	ref map<int, RplId> m_playersPlayable = new map<int, RplId>();
-	ref map<RplId, int> m_playablePlayersRemembered = new map<RplId, int>();
-	ref map<RplId, int> m_playablePlayers = new map<RplId, int>(); // reversed m_playersPlayable for fast search
-	ref map<int, bool> m_playersPin = new map<int, bool>(); // is player pined
-	ref map<int, FactionKey> m_playersFaction = new map<int, FactionKey>(); // player factions
-	ref map<int, FactionKey> m_playersFactionRemembered = new map<int, FactionKey>(); // player factions persistant
-	ref map<RplId, int> m_playablePlayerGroupId = new map<RplId, int>(); // playable to player group
-	ref map<int, string> m_playersLastName = new map<int, string>(); // playerid to player name (persistant)
-	ref map<FactionKey, int> m_mFactionReady = new map<FactionKey, int>(); // faction ready state
-	ref map<RplId, string> m_mPlayablePrefabs = new map<RplId, string>();
-	ref map<RplId, string> m_mPlayableNames = new map<RplId, string>();
+	protected ref map<string, int> m_mGUIDtoPlayerId = new map<string, int>();
+	protected ref map<int, string> m_mPlayerIdToGUID = new map<int, string>();
+	protected ref map<string, int> m_mDisconnectedGUIDs = new map<string, int>();
 
-	// Server-only GUID tracking for reconnect player ID remapping
-	protected ref map<string, int> m_mGUIDtoPlayerId = new map<string, int>();   // GUID -> current playerId
-	protected ref map<int, string> m_mPlayerIdToGUID = new map<int, string>();   // playerId -> GUID
-	protected ref map<string, int> m_mDisconnectedGUIDs = new map<string, int>(); // GUID -> old playerId (for disconnected players)
+	protected ref array<PS_PlayableComponent> m_aRegistrationQueue = {};
+	protected static const int REGISTRATION_INTERVAL_MS = 50;
 
-	// Invokers
-	ref ScriptInvokerInt m_eOnPlayerConnected = new ScriptInvokerInt();
-	ScriptInvokerInt GetOnPlayerConnected()
-	{
-		return m_eOnPlayerConnected;
-	}
-	ref ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected> m_eOnPlayerDisconnected = new ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected>();
-	ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected> GetOnPlayerDisconnected()
-	{
-		return m_eOnPlayerDisconnected;
-	}
-	ref PS_ScriptInvokerFactionChange m_eOnFactionChange = new PS_ScriptInvokerFactionChange(); // int playerId, FactionKey factionKey, FactionKey factionKeyOld
-	PS_ScriptInvokerFactionChange GetOnFactionChange()
-	{
-		return m_eOnFactionChange;
-	}
-	ref PS_ScriptInvokerPlayable m_eOnPlayableRegistered = new PS_ScriptInvokerPlayable();
-	PS_ScriptInvokerPlayable GetOnPlayableRegistered()
-	{
-		return m_eOnPlayableRegistered;
-	}
-	ref PS_ScriptInvokerPlayable m_eOnPlayableUnregistered = new PS_ScriptInvokerPlayable();
-	PS_ScriptInvokerPlayable GetOnPlayableUnregistered()
-	{
-		return m_eOnPlayableUnregistered;
-	}
-	ref PS_ScriptInvokerPinChange m_eOnPlayerPinChange = new PS_ScriptInvokerPinChange();
-	PS_ScriptInvokerPinChange GetOnPlayerPinChange()
-	{
-		return m_eOnPlayerPinChange;
-	}
-	ref PS_ScriptInvokerPlayerStateChange m_eOnPlayerStateChange = new PS_ScriptInvokerPlayerStateChange();
-	PS_ScriptInvokerPlayerStateChange GetOnPlayerStateChange()
-	{
-		return m_eOnPlayerStateChange;
-	}
-	ref PS_ScriptInvokerPlayerPlayableChange m_eOnPlayerPlayableChange = new PS_ScriptInvokerPlayerPlayableChange();
-	PS_ScriptInvokerPlayerPlayableChange GetOnPlayerPlayableChange()
-	{
-		return m_eOnPlayerPlayableChange;
-	}
-	ref PS_ScriptInvokerPlayableChangeGroup m_eOnPlayableChangeGroup = new PS_ScriptInvokerPlayableChangeGroup();
-	PS_ScriptInvokerPlayableChangeGroup GetOnPlayableChangeGroup()
-	{
-		return m_eOnPlayableChangeGroup;
-	}
-	ref ScriptInvokerInt m_eOnStartTimerCounterChanged = new ScriptInvokerInt();
-	ScriptInvokerInt GetOnStartTimerCounterChanged()
-	{
-		return m_eOnStartTimerCounterChanged;
-	}
-	ref PS_ScriptInvokerFactionReadyChangeGroup m_eFactionReadyChanged = new PS_ScriptInvokerFactionReadyChangeGroup();
-	PS_ScriptInvokerFactionReadyChangeGroup GetOnFactionReadyChanged()
-	{
-		return m_eFactionReadyChanged;
-	}
+	bool m_bFactionsReadySended;
+	bool m_bRplLoaded = false;
 
-	//Global cache
 	protected PS_GameModeCoop m_GameModeCoop;
 	protected ScriptCallQueue m_CallQueue;
 	protected PlayerManager m_PlayerManager;
-
 	protected SCR_PlayerController m_CurrentPlayerController;
 	static protected PS_PlayableControllerComponent s_CurrentPlayableController;
-
 	protected static PS_PlayableManager s_Instance;
 
-	// Registration queue to stagger playable registrations and avoid RPC burst at init
-	protected ref array<PS_PlayableComponent> m_aRegistrationQueue = {};
-	protected static const int REGISTRATION_INTERVAL_MS = 50; // 50ms between registrations
+	// ============================================================================================
+	// ======================================= Invokers ===========================================
+	// ============================================================================================
 
-	[RplProp()]
-	int m_iMaxPlayersCount = 1; // Max players count from server config
-	
-	// TODO: Remove?
-	[RplProp(onRplName: "OnStartTimerCounterChanged")]
-	int m_iStartTimerCounter = -1;
-	void StartTime()
-	{
-		m_iStartTimerCounter -= 1;
-		Replication.BumpMe();
-		OnStartTimerCounterChanged();
-		if (m_iStartTimerCounter == 0)
-		{
-			PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
-			gameModeCoop.AdvanceGameState(SCR_EGameModeState.SLOTSELECTION);
-			m_CallQueue.Remove(StartTime);
-		}
-	}
-	void OnStartTimerCounterChanged()
-	{
-		m_eOnStartTimerCounterChanged.Invoke(m_iStartTimerCounter);
-	}
-	
-	bool m_bFactionsReadySended; // Is faction ready message already sended?
+	ref ScriptInvokerInt m_eOnPlayerConnected = new ScriptInvokerInt();
+	ScriptInvokerInt GetOnPlayerConnected() { return m_eOnPlayerConnected; }
 
-	// Is it required?
-	bool m_bRplLoaded = false;
-	bool IsReplicated()
-	{
-		return m_bRplLoaded;
-	}
+	ref ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected> m_eOnPlayerDisconnected = new ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected>();
+	ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected> GetOnPlayerDisconnected() { return m_eOnPlayerDisconnected; }
 
-	// --------------------------------------------------------------------------------------------
-	// more singletons for singletons god, make our spagetie kingdom great
-	static PS_PlayableManager GetInstance()
-	{
-		return s_Instance;
-	}
+	ref PS_ScriptInvokerFactionChange m_eOnFactionChange = new PS_ScriptInvokerFactionChange();
+	PS_ScriptInvokerFactionChange GetOnFactionChange() { return m_eOnFactionChange; }
 
-	// --------------------------------------------------------------------------------------------
+	ref PS_ScriptInvokerPlayable m_eOnPlayableRegistered = new PS_ScriptInvokerPlayable();
+	PS_ScriptInvokerPlayable GetOnPlayableRegistered() { return m_eOnPlayableRegistered; }
+
+	ref PS_ScriptInvokerPlayable m_eOnPlayableUnregistered = new PS_ScriptInvokerPlayable();
+	PS_ScriptInvokerPlayable GetOnPlayableUnregistered() { return m_eOnPlayableUnregistered; }
+
+	ref PS_ScriptInvokerPinChange m_eOnPlayerPinChange = new PS_ScriptInvokerPinChange();
+	PS_ScriptInvokerPinChange GetOnPlayerPinChange() { return m_eOnPlayerPinChange; }
+
+	ref PS_ScriptInvokerPlayerStateChange m_eOnPlayerStateChange = new PS_ScriptInvokerPlayerStateChange();
+	PS_ScriptInvokerPlayerStateChange GetOnPlayerStateChange() { return m_eOnPlayerStateChange; }
+
+	ref PS_ScriptInvokerPlayerPlayableChange m_eOnPlayerPlayableChange = new PS_ScriptInvokerPlayerPlayableChange();
+	PS_ScriptInvokerPlayerPlayableChange GetOnPlayerPlayableChange() { return m_eOnPlayerPlayableChange; }
+
+	ref PS_ScriptInvokerPlayableChangeGroup m_eOnPlayableChangeGroup = new PS_ScriptInvokerPlayableChangeGroup();
+	PS_ScriptInvokerPlayableChangeGroup GetOnPlayableChangeGroup() { return m_eOnPlayableChangeGroup; }
+
+	ref ScriptInvokerInt m_eOnStartTimerCounterChanged = new ScriptInvokerInt();
+	ScriptInvokerInt GetOnStartTimerCounterChanged() { return m_eOnStartTimerCounterChanged; }
+
+	ref PS_ScriptInvokerFactionReadyChangeGroup m_eFactionReadyChanged = new PS_ScriptInvokerFactionReadyChangeGroup();
+	PS_ScriptInvokerFactionReadyChangeGroup GetOnFactionReadyChanged() { return m_eFactionReadyChanged; }
+
+	// ============================================================================================
+	// ======================================= Lifecycle ==========================================
+	// ============================================================================================
+
+	static PS_PlayableManager GetInstance() { return s_Instance; }
+	bool IsReplicated() { return m_bRplLoaded; }
+
 	override protected void OnPostInit(IEntity owner)
 	{
 		s_Instance = this;
 
-		//Cache
 		m_GameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
 		m_CallQueue = GetGame().GetCallqueue();
 		m_PlayerManager = GetGame().GetPlayerManager();
@@ -183,18 +168,18 @@ class PS_PlayableManager : ScriptComponent
 			m_bRplLoaded = true;
 		if (RplSession.Mode() == RplMode.Dedicated)
 			ForceGetSessionMaxPlayersCount();
-	
-		// Register events
+
 		m_GameModeCoop.GetOnPlayerConnected().Insert(OnPlayerConnected);
 		m_GameModeCoop.GetOnPlayerDisconnected().Insert(OnPlayerDisconnected);
 		m_GameModeCoop.GetOnPlayerRoleChange().Insert(OnPlayerRoleChange);
 		m_CallQueue.Call(LateInit, owner);
 	}
+
 	protected void LateInit(IEntity owner)
 	{
 		if (RplSession.Mode() == RplMode.Dedicated)
 			return;
-		
+
 		m_CurrentPlayerController = SCR_PlayerController.Cast(GetGame().GetPlayerController());
 		if (!m_CurrentPlayerController)
 		{
@@ -202,9 +187,27 @@ class PS_PlayableManager : ScriptComponent
 			return;
 		}
 		s_CurrentPlayableController = m_CurrentPlayerController.PS_GetPLayableComponent();
+
+		if (!m_bRplLoaded)
+			m_CallQueue.CallLater(MarkRplLoaded, 500, false);
 	}
-	// --------------------------------------------------------------------------------------------
-	// Read max players count from server config
+
+	protected void MarkRplLoaded()
+	{
+		m_bRplLoaded = true;
+	}
+
+	protected void OnPlayablesReplicated()
+	{
+		m_bRplLoaded = true;
+		UpdatePlayablesSorted();
+
+		foreach (RplId playableId, PS_PlayableContainer container : m_aPlayables.GetRawMap())
+		{
+			m_CallQueue.Call(OnPlayableRegisteredLateInvoke, playableId, container);
+		}
+	}
+
 	protected void ForceGetSessionMaxPlayersCount()
 	{
 		DSSession dSSession = GetGame().GetBackendApi().GetDSSession();
@@ -218,14 +221,31 @@ class PS_PlayableManager : ScriptComponent
 			}
 		}
 		else
-			m_CallQueue.Call(ForceGetSessionMaxPlayersCount); // Loading take some time, awaiting valid config
+			m_CallQueue.Call(ForceGetSessionMaxPlayersCount);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// ----------------------------------- Main entry point ---------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Get control on selected playable entity, or initial and become spectator if no playable provided
-	// Executed only on server
+	void OnStartTimerCounterChanged()
+	{
+		m_eOnStartTimerCounterChanged.Invoke(m_iStartTimerCounter);
+	}
+
+	void StartTime()
+	{
+		m_iStartTimerCounter -= 1;
+		Replication.BumpMe();
+		OnStartTimerCounterChanged();
+		if (m_iStartTimerCounter == 0)
+		{
+			PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
+			gameModeCoop.AdvanceGameState(SCR_EGameModeState.SLOTSELECTION);
+			m_CallQueue.Remove(StartTime);
+		}
+	}
+
+	// ============================================================================================
+	// ==================================== Main Entry Point ======================================
+	// ============================================================================================
+
 	void ApplyPlayable(int playerId)
 	{
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(m_PlayerManager.GetPlayerController(playerId));
@@ -236,28 +256,23 @@ class PS_PlayableManager : ScriptComponent
 
 		SetPlayerState(playerId, PS_EPlayableControllerState.Playing);
 
-		// If entity dead, switch to spectator after some delay
 		RplId playableId = GetPlayableByPlayer(playerId);
 		if (playableId != RplId.Invalid())
 		{
 			PS_PlayableContainer playableContainer = GetPlayableById(playableId);
 			if (playableContainer && playableContainer.GetDamageState() == EDamageState.DESTROYED)
-			{
 				m_CallQueue.CallLater(DelayedSwitchToInitialEntity, 1000, false, playerId);
-			}
 		}
 
 		IEntity entity;
-		if (playableId == RplId.Invalid()) { // switch to null entity
-			// Remove group
+		if (playableId == RplId.Invalid())
+		{
 			SCR_AIGroup currentGroup = groupsManagerComponent.GetPlayerGroup(playableId);
 			if (currentGroup)
 				currentGroup.RemovePlayer(playerId);
 
-			// Defer faction clear to spread RPC load during death transitions
 			m_CallQueue.CallLater(SetPlayerFactionKey, 200, false, playerId, "");
 
-			// Create new entity if need
 			entity = playableController.GetInitialEntity();
 			if (!entity)
 			{
@@ -269,44 +284,36 @@ class PS_PlayableManager : ScriptComponent
 				playableController.SetInitialEntity(entity);
 			}
 
-			// Apply entity
 			playerController.SetInitialMainEntity(entity);
 			return;
-		} else
+		}
+		else
 			entity = GetPlayableById(playableId).GetPlayableComponent().GetOwner();
 
-		// Delete initial entity if exists
 		IEntity initialEntity = playableController.GetInitialEntity();
 		if (initialEntity)
 			m_CallQueue.Call(SCR_EntityHelper.DeleteEntityAndChildren, initialEntity);
 
-		// Apply entity
 		playerController.SetInitialMainEntity(entity);
 
-		// Set new player faction
 		SCR_ChimeraCharacter playableCharacter = SCR_ChimeraCharacter.Cast(entity);
 		SCR_Faction faction = SCR_Faction.Cast(playableCharacter.GetFaction());
 		SetPlayerFactionKey(playerId, faction.GetFactionKey());
 
-		// Requred delay, since entity take one frame to apply controls
 		m_CallQueue.CallLater(ChangeGroup, 0, false, playerId, playableId);
 	}
-	// --------------------------------------------------------------------------------------------
+
 	protected void DelayedSwitchToInitialEntity(int playerId)
 	{
 		PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
 		gameModeCoop.SwitchToInitialEntity(playerId);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Change player group via playable
 	void ChangeGroup(int playerId, RplId playableId)
 	{
-		// Get updated player
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(m_PlayerManager.GetPlayerController(playerId));
 		PS_PlayableControllerComponent playableController = playerController.PS_GetPLayableComponent();
 
-		// Get playable container
 		SCR_AIGroup playerGroup = GetPlayerGroupByPlayable(playableId);
 		SCR_ChimeraCharacter leaderCharacter = null;
 		if (playerGroup)
@@ -315,47 +322,37 @@ class PS_PlayableManager : ScriptComponent
 		if (leaderCharacter)
 			playableContainerLeader = leaderCharacter.PS_GetPlayable().GetPlayableContainer();
 
-		// Join group
 		SCR_PlayerControllerGroupComponent playerControllerGroupComponent = SCR_PlayerControllerGroupComponent.Cast(playerController.FindComponent(SCR_PlayerControllerGroupComponent));
 		SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
 		if (playerGroup)
 			playerControllerGroupComponent.PS_AskJoinGroup(playerGroup.GetGroupID());
 
-		// Another workaround
-		// Thanks bohem, no one zoomer will be harmed if you remove all text from game.
-		// Maybe also multiplayer from arma? It can harm people, very dangerous.
 		if (playerGroup && playerGroup.GetNameAuthorID() == -1)
 			playerGroup.SetCustomName(playerGroup.GetCustomName(), playerId);
 
-
-		// Switch leader if need
 		if (playableContainerLeader)
 			if (playableContainerLeader.GetRplId() > playableId)
 				groupsManagerComponent.SetGroupLeader(playerGroup.GetGroupID(), playerId);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// ------------------------------------- Registration -----------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Register playable container to global list, replicated across clients
-	// Save playable name and prefab for later use
-	// - SERVER SIDE: Create new group for players if requred
+	// ============================================================================================
+	// ===================================== Registration =========================================
+	// ============================================================================================
+
 	void RegisterPlayable(PS_PlayableComponent playableComponent)
 	{
 		RplId playableId = playableComponent.GetRplId();
-		if (m_aPlayables.Contains(playableId)) // Already registered
+		if (m_aPlayables.Contains(playableId))
 			return;
 		SCR_ChimeraCharacter playableCharacter = playableComponent.GetCharacter();
 		if (!playableCharacter.PS_GetChimeraAIControlComponent())
 			return;
 
-		// Queue registration to stagger RPCs and avoid network burst at init
 		m_aRegistrationQueue.Insert(playableComponent);
 		if (m_aRegistrationQueue.Count() == 1)
 			m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
 	}
 
-	// Process one queued registration per tick, staggering RPCs over time
 	protected void ProcessRegistrationQueue()
 	{
 		if (m_aRegistrationQueue.IsEmpty())
@@ -364,7 +361,6 @@ class PS_PlayableManager : ScriptComponent
 		PS_PlayableComponent playableComponent = m_aRegistrationQueue[0];
 		m_aRegistrationQueue.RemoveOrdered(0);
 
-		// Validate the component is still alive and valid
 		if (!playableComponent || !playableComponent.GetOwner())
 		{
 			if (!m_aRegistrationQueue.IsEmpty())
@@ -373,7 +369,7 @@ class PS_PlayableManager : ScriptComponent
 		}
 
 		RplId playableId = playableComponent.GetRplId();
-		if (m_aPlayables.Contains(playableId)) // Already registered (could happen if queued twice)
+		if (m_aPlayables.Contains(playableId))
 		{
 			if (!m_aRegistrationQueue.IsEmpty())
 				m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
@@ -382,42 +378,34 @@ class PS_PlayableManager : ScriptComponent
 
 		RegisterPlayableImmediate(playableComponent);
 
-		// Schedule next registration
 		if (!m_aRegistrationQueue.IsEmpty())
 			m_CallQueue.CallLater(ProcessRegistrationQueue, REGISTRATION_INTERVAL_MS, false);
 	}
 
-	// Actual registration logic (fires RPCs for one playable)
 	protected void RegisterPlayableImmediate(PS_PlayableComponent playableComponent)
 	{
 		RplId playableId = playableComponent.GetRplId();
 		SCR_ChimeraCharacter playableCharacter = playableComponent.GetCharacter();
 
-		// Save and replicate data
 		PS_PlayableContainer container = playableComponent.GetPlayableContainer();
-		RPC_RegisterPlayable(container);
-		Rpc(RPC_RegisterPlayable, container);
+		m_aPlayables.Set(playableId, container);
 		SetPlayablePrefab(playableId, playableComponent.GetOwner().GetPrefabData().GetPrefabName());
 		SetPlayableName(playableId, playableComponent.GetName());
 
-		// Server side
 		if (Replication.IsServer())
 		{
 			AIControlComponent aiControl = playableCharacter.PS_GetChimeraAIControlComponent();
 			SCR_AIGroup playableGroup = SCR_AIGroup.Cast(aiControl.GetControlAIAgent().GetParentGroup());
 			SCR_AIGroup playerGroup;
 
-			if (!playableGroup) // Has no group -> broken unit.
+			if (!playableGroup)
 				return;
 
-			// If no player, group create new
 			if (!playableGroup.m_PlayersGroup)
 			{
 				SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
 				playerGroup = groupsManagerComponent.CreateNewPlayableGroup(playableGroup.GetFaction());
 
-				// Setup link, command system override slave group
-				// TODO: somehow move from PSCore
 				playerGroup.m_BotsGroup = playableGroup;
 				playableGroup.m_PlayersGroup = playerGroup;
 
@@ -430,13 +418,49 @@ class PS_PlayableManager : ScriptComponent
 			} else {
 				playerGroup = playableGroup.m_PlayersGroup;
 			}
-			SetPlayablePlayerGroupId(playableId, playerGroup.GetGroupID()); // Save link to map for fast search
-			m_CallQueue.Call(UpdateGroupCallsign, playableId, playerGroup, playableGroup) // Delay for group init
+			SetPlayablePlayerGroupId(playableId, playerGroup.GetGroupID());
+			m_CallQueue.Call(UpdateGroupCallsign, playableId, playerGroup, playableGroup)
 		}
+
+		Replication.BumpMe();
+
+		UpdatePlayablesSortedDelayed();
+		m_CallQueue.Call(OnPlayableRegisteredLateInvoke, playableId, container);
+		Rpc(RPC_NotifyPlayableRegistered, playableId);
 	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_NotifyPlayableRegistered(RplId playableId)
+	{
+		m_CallQueue.Call(OnPlayableRegisteredClient, playableId, 0);
+	}
+
+	protected void OnPlayableRegisteredClient(RplId playableId, int retryCount)
+	{
+		PS_PlayableContainer container = m_aPlayables.Get(playableId);
+		if (!container && retryCount < 30)
+		{
+			m_CallQueue.CallLater(OnPlayableRegisteredClient, 100, false, playableId, retryCount + 1);
+			return;
+		}
+		if (!container)
+			return;
+
+		UpdatePlayablesSortedDelayed();
+		m_CallQueue.Call(OnPlayableRegisteredLateInvoke, playableId, container);
+	}
+
+	protected void OnPlayableRegisteredLateInvoke(RplId playableId, PS_PlayableContainer playableComponent)
+	{
+		m_CallQueue.Call(OnPlayableRegisteredLateInvoke2, playableId, playableComponent);
+	}
+	protected void OnPlayableRegisteredLateInvoke2(RplId playableId, PS_PlayableContainer playableComponent)
+	{
+		m_eOnPlayableRegistered.Invoke(playableId, playableComponent);
+	}
+
 	protected void UpdateGroupCallsign(RplId playableId, SCR_AIGroup playerGroup, SCR_AIGroup playableGroup)
 	{
-		// Assign manualy set callsigns
 		PS_GroupCallsignAssigner groupCallsignAssigner = PS_GroupCallsignAssigner.Cast(playableGroup.FindComponent(PS_GroupCallsignAssigner));
 		int company, platoon, squad;
 		if (groupCallsignAssigner) {
@@ -448,64 +472,53 @@ class PS_PlayableManager : ScriptComponent
 		SCR_CallsignGroupComponent callsignComponent = SCR_CallsignGroupComponent.Cast(playerGroup.FindComponent(SCR_CallsignGroupComponent));
 		callsignComponent.ReAssignGroupCallsign(company, platoon, squad);
 
-		m_CallQueue.CallLater(RegisterGroupName, 0, false, playableId, playerGroup) // Delay for callsign init
+		m_CallQueue.CallLater(RegisterGroupName, 0, false, playableId, playerGroup)
 	}
+
 	protected void RegisterGroupName(RplId playableId, SCR_AIGroup playerGroup)
 	{
-		// Get group callsign
 		SCR_CallsignGroupComponent callsignComponent = SCR_CallsignGroupComponent.Cast(playerGroup.FindComponent(SCR_CallsignGroupComponent));
 		int company, platoon, squad;
 		callsignComponent.GetCallsignIndexes(company, platoon, squad);
 		int groupCallsign = 1000000 * company + 1000 * platoon + 1 * squad;
 
-		// Create VoN group channels
 		PS_VoNRoomsManager VoNRoomsManager = PS_VoNRoomsManager.GetInstance();
 		VoNRoomsManager.GetOrCreateRoomWithFaction(playerGroup.GetFaction().GetFactionKey(), groupCallsign.ToString());
 		VoNRoomsManager.GetOrCreateRoomWithFaction(playerGroup.GetFaction().GetFactionKey(), "#PS-VoNRoom_Command");
 		VoNRoomsManager.GetOrCreateRoomWithFaction(playerGroup.GetFaction().GetFactionKey(), "#PS-VoNRoom_Faction");
 	}
-	// Execute on both client and server
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_RegisterPlayable(PS_PlayableContainer container)
-	{
-		m_aPlayables[container.GetRplId()] = container;
-		m_CallQueue.Remove(UpdatePlayablesSortedDelayed);
-		m_CallQueue.Remove(UpdatePlayablesSorted);
-		m_CallQueue.Call(UpdatePlayablesSortedDelayed); // List updated resort
-		m_CallQueue.Call(OnPlayableRegisteredLateInvoke, container.GetRplId(), container); // 2 frames delayed event invoke, give group time to fully initialize
-	}
-	protected void OnPlayableRegisteredLateInvoke(RplId playableId, PS_PlayableContainer playableComponent)
-	{
-		m_CallQueue.Call(OnPlayableRegisteredLateInvoke2, playableId, playableComponent);
-	}
-	protected void OnPlayableRegisteredLateInvoke2(RplId playableId, PS_PlayableContainer playableComponent)
-	{
-		m_eOnPlayableRegistered.Invoke(playableId, playableComponent);
-	}
 
-	// --------------------------------------------------------------------------------------------
-	// Remove plyable from list global list replicated
 	void UnRegisterPlayable(RplId playableId)
-	{
-		RPC_UnRegisterPlayable(playableId);
-		Rpc(RPC_UnRegisterPlayable, playableId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_UnRegisterPlayable(RplId playableId)
 	{
 		if (!m_aPlayables.Contains(playableId))
 			return;
-		PS_PlayableContainer playableContainer = m_aPlayables[playableId];
-		m_aPlayables.Remove(playableId);
+		PS_PlayableContainer playableContainer = m_aPlayables.Get(playableId);
 
-		UpdatePlayablesSorted(); // List updated resort
+		Rpc(RPC_NotifyPlayableUnregistered, playableId);
 		m_eOnPlayableUnregistered.Invoke(playableId, playableContainer);
 		playableContainer.m_eOnUnregister.Invoke();
+
+		m_aPlayables.Remove(playableId);
+		Replication.BumpMe();
+		UpdatePlayablesSorted();
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Register vehicle to global list replicated
-	// TODO: attach any entity
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_NotifyPlayableUnregistered(RplId playableId)
+	{
+		PS_PlayableContainer container = m_aPlayables.Get(playableId);
+		if (container)
+		{
+			m_eOnPlayableUnregistered.Invoke(playableId, container);
+			container.m_eOnUnregister.Invoke();
+		}
+		UpdatePlayablesSorted();
+	}
+
+	// ============================================================================================
+	// ==================================== Vehicle Registration ==================================
+	// ============================================================================================
+
 	void RegisterGroupVehicle(RplId rplId, SCR_AIGroup group, IEntity vehicle)
 	{
 		if (!Replication.IsServer())
@@ -526,92 +539,72 @@ class PS_PlayableManager : ScriptComponent
 		if (prefab == "")
 			prefab = vehicle.GetPrefabData().GetPrefab().GetAncestor().GetAncestor().GetResourceName();
 		playableVehicleContainer.Init(rplId, prefab, uIInfo.GetIconPath(), groupCallsign, group.m_PlayersGroup.GetGroupID(), vehicleFactionAffiliationComponent.GetDefaultFactionKey());
-		Rpc(RPC_RegisterGroupVehicle, playableVehicleContainer);
-		RPC_RegisterGroupVehicle(playableVehicleContainer);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_RegisterGroupVehicle(PS_PlayableVehicleContainer playableVehicleContainer)
-	{
-		m_mPlayableVehicles[playableVehicleContainer.m_iRplId] = playableVehicleContainer;
+
+		m_mPlayableVehicles.Set(rplId, playableVehicleContainer);
+		Replication.BumpMe();
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Remove vehicle from  global list list replicated
 	void UnRegisterGroupVehicle(RplId rplId)
 	{
 		if (!Replication.IsServer())
 			return;
-		Rpc(RPC_UnRegisterGroupVehicle, rplId);
-		RPC_UnRegisterGroupVehicle(rplId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_UnRegisterGroupVehicle(RplId rplId)
-	{
 		m_mPlayableVehicles.Remove(rplId);
+		Replication.BumpMe();
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// --------------------------------------- Accessors ------------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Get playable from global list, or null if no
-	// - Synced on clients
+	// ============================================================================================
+	// ======================================= Accessors ==========================================
+	// ============================================================================================
+
 	PS_PlayableContainer GetPlayableById(RplId PlayableId)
 	{
-		PS_PlayableContainer playableComponent;
-		m_aPlayables.Find(PlayableId, playableComponent);
-		return playableComponent;
+		return m_aPlayables.Get(PlayableId);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Get global map of playables
-	// - Synced on clients
 	map<RplId, ref PS_PlayableContainer> GetPlayables()
 	{
-		return m_aPlayables;
+		return m_aPlayables.GetRawMap();
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Get cached list of playables sorted by CallSign -> Rank -> RplId
-	// - Synced on clients
 	array<PS_PlayableContainer> GetPlayablesSorted()
 	{
 		return m_aPlayablesSorted;
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Get global map of vehicles
-	// - Synced on clients
 	map<RplId, ref PS_PlayableVehicleContainer> GetPlayableVehicles()
 	{
-		return m_mPlayableVehicles;
+		return m_mPlayableVehicles.GetRawMap();
 	}
 
-	// --------------------------------- Player faction key ---------------------------------------
-	// Get player Factionkey or empty string if no player found
-	// - Synced on clients
+	// ============================================================================================
+	// ==================================== Player Faction ========================================
+	// ============================================================================================
+
 	FactionKey GetPlayerFactionKey(int playerId)
 	{
 		if (!m_playersFaction.Contains(playerId))
 			return "";
-		return m_playersFaction[playerId];
+		return m_playersFaction.Get(playerId);
 	}
-	// Get last player not null Factionkey or empty string if no player found
-	// - Synced on clients
+
 	FactionKey GetPlayerFactionKeyRemembered(int playerId)
 	{
 		if (!m_playersFactionRemembered.Contains(playerId))
 			return "";
-		return m_playersFactionRemembered[playerId];
+		return m_playersFactionRemembered.Get(playerId);
 	}
-	// Set player FactionKey
-	// - Execute ONLY on server
+
 	void SetPlayerFactionKey(int playerId, FactionKey factionKey)
 	{
-		// Replicate update
-		RPC_SetPlayerFactionKey(playerId, factionKey);
-		Rpc(RPC_SetPlayerFactionKey, playerId, factionKey);
+		FactionKey factionKeyOld = GetPlayerFactionKey(playerId);
+		m_playersFaction.Set(playerId, factionKey);
+		if (factionKey != "")
+			m_playersFactionRemembered.Set(playerId, factionKey);
+		Replication.BumpMe();
 
-		// Update vanilla faction
+		m_eOnFactionChange.Invoke(playerId, factionKey, factionKeyOld);
+		Rpc(RPC_NotifyFactionChanged, playerId, factionKey, factionKeyOld);
+
 		PlayerController playerController = m_PlayerManager.GetPlayerController(playerId);
 		if (!playerController)
 			return;
@@ -620,33 +613,40 @@ class PS_PlayableManager : ScriptComponent
 		playerFactionAffiliation.SetAffiliatedFactionByKey(factionKey);
 		factionManager.UpdatePlayerFaction_S(playerFactionAffiliation);
 	}
+
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayerFactionKey(int playerId, FactionKey factionKey)
+	protected void RPC_NotifyFactionChanged(int playerId, FactionKey factionKey, FactionKey factionKeyOld)
 	{
-		FactionKey factionKeyOld = GetPlayerFactionKey(playerId);
-		m_playersFaction[playerId] = factionKey;
-		if (factionKey != "")
-			m_playersFactionRemembered[playerId] = factionKey; // Remember last not null
 		m_eOnFactionChange.Invoke(playerId, factionKey, factionKeyOld);
 	}
 
-	// ------------------------------------- Player state -----------------------------------------
-	// Get current player sloting state. TODO: proper naming
-	// - Synced on clients
+	// ============================================================================================
+	// ==================================== Player State ==========================================
+	// ============================================================================================
+
 	PS_EPlayableControllerState GetPlayerState(int playerId)
 	{
-		PS_EPlayableControllerState state = PS_EPlayableControllerState.NotReady;
-		m_playersStates.Find(playerId, state);
-		return state;
+		if (!m_playersStates.Contains(playerId))
+			return PS_EPlayableControllerState.NotReady;
+		return m_playersStates.Get(playerId);
 	}
-	// Set player sloting state
-	// - Execute ONLY on server
+
 	void SetPlayerState(int playerId, PS_EPlayableControllerState state)
 	{
-		RPC_SetPlayerState(playerId, state);
-		Rpc(RPC_SetPlayerState, playerId, state);
-		
-		// Try start counter
+		m_playersStates.Set(playerId, state);
+		Replication.BumpMe();
+
+		m_eOnPlayerStateChange.Invoke(playerId, state);
+		RplId playableId = GetPlayableByPlayer(playerId);
+		if (playableId != RplId.Invalid())
+		{
+			PS_PlayableContainer playableContainer = m_aPlayables.Get(playableId);
+			if (playableContainer)
+				playableContainer.GetOnPlayerStateChange().Invoke(state);
+		}
+
+		Rpc(RPC_NotifyPlayerStateChanged, playerId, state);
+
 		PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
 		SCR_EGameModeState gameModeState = gameModeCoop.GetState();
 		if (gameModeState == SCR_EGameModeState.SLOTSELECTION)
@@ -660,7 +660,7 @@ class PS_PlayableManager : ScriptComponent
 				if (!adminExist)
 					adminExist = SCR_Global.IsAdmin(otherPlayerId);
 
-				PS_EPlayableControllerState playerState = m_playersStates[otherPlayerId];
+				PS_EPlayableControllerState playerState = GetPlayerState(otherPlayerId);
 				if (playerState != PS_EPlayableControllerState.Ready)
 				{
 					if (m_iStartTimerCounter != -1)
@@ -682,10 +682,10 @@ class PS_PlayableManager : ScriptComponent
 			}
 		}
 	}
+
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayerState(int playerId, PS_EPlayableControllerState state)
+	protected void RPC_NotifyPlayerStateChanged(int playerId, PS_EPlayableControllerState state)
 	{
-		m_playersStates[playerId] = state;
 		m_eOnPlayerStateChange.Invoke(playerId, state);
 		RplId playableId = GetPlayableByPlayer(playerId);
 		if (playableId != RplId.Invalid())
@@ -696,63 +696,68 @@ class PS_PlayableManager : ScriptComponent
 		}
 	}
 
-	// ------------------------------------ player name -------------------------------------------
-	// Get cached player name or empty string if no player found
-	// - Synced on clients
+	// ============================================================================================
+	// ==================================== Player Name ===========================================
+	// ============================================================================================
+
 	string GetPlayerName(int playerId)
 	{
 		if (!m_playersLastName.Contains(playerId))
 			return "";
-		return m_playersLastName[playerId];
+		return m_playersLastName.Get(playerId);
 	}
-	// Set cached player name
-	// - Execute ONLY on server
+
 	void SetPlayerName(int playerId, string playerName)
 	{
-		RPC_SetPlayerName(playerId, playerName);
-		Rpc(RPC_SetPlayerName, playerId, playerName);
+		m_playersLastName.Set(playerId, playerName);
+		Replication.BumpMe();
+
+		m_eOnPlayerConnected.Invoke(playerId);
+		Rpc(RPC_NotifyPlayerName, playerId);
 	}
+
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayerName(int playerId, string playerName)
+	protected void RPC_NotifyPlayerName(int playerId)
 	{
-		m_playersLastName[playerId] = playerName;
 		m_eOnPlayerConnected.Invoke(playerId);
 	}
 
-	// -------------------------------- Faction ready state ---------------------------------------
-	// Get faction ready state
-	// - Synced on clients
+	// ============================================================================================
+	// ==================================== Faction Ready =========================================
+	// ============================================================================================
+
 	int GetFactionReady(FactionKey factionKey)
 	{
-		return m_mFactionReady[factionKey];
+		if (!m_mFactionReady.Contains(factionKey))
+			return 0;
+		return m_mFactionReady.Get(factionKey);
 	}
-	// Set faction ready state
-	// - Execute ONLY on server
+
 	void SetFactionReady(FactionKey factionKey, int readyValue)
 	{
-		RPC_SetFactionReady(factionKey, readyValue);
-		Rpc(RPC_SetFactionReady, factionKey, readyValue);
+		m_mFactionReady.Set(factionKey, readyValue);
+		Replication.BumpMe();
 
-		// All factions ready message already sended
+		m_eFactionReadyChanged.Invoke(factionKey, readyValue);
+		Rpc(RPC_NotifyFactionReady, factionKey, readyValue);
+
 		if (m_bFactionsReadySended)
 			return;
 
-		// Check is all factions ready
 		array<int> players = {};
 		GetGame().GetPlayerManager().GetPlayers(players);
 		m_bFactionsReadySended = true;
 		foreach (int playerId : players)
 		{
-			factionKey = GetPlayerFactionKey(playerId);
-			if (factionKey == "")
+			FactionKey playerFaction = GetPlayerFactionKey(playerId);
+			if (playerFaction == "")
 				continue;
-			if (m_mFactionReady[factionKey])
+			if (GetFactionReady(playerFaction))
 				continue;
 			m_bFactionsReadySended = false;
 			break;
 		}
 
-		// Send message to admins, if all factions ready
 		if (m_bFactionsReadySended)
 		{
 			SCR_ChatPanelManager chatPanelManager = SCR_ChatPanelManager.GetInstance();
@@ -760,267 +765,250 @@ class PS_PlayableManager : ScriptComponent
 			invoker.Invoke(null, "Factions ready");
 		}
 	}
+
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetFactionReady(FactionKey factionKey, int readyValue)
+	protected void RPC_NotifyFactionReady(FactionKey factionKey, int readyValue)
 	{
-		m_mFactionReady[factionKey] = readyValue;
 		m_eFactionReadyChanged.Invoke(factionKey, readyValue);
 	}
 
-	// ------------------------------- Playable prefab name ---------------------------------------
-	// Get playable prefab name (ResourceName) by PlayableRplId
-	// - Synced on clients
+	// ============================================================================================
+	// ==================================== Playable Prefab/Name ==================================
+	// ============================================================================================
+
 	string GetPlayablePrefab(RplId playableId)
 	{
 		if (!m_mPlayablePrefabs.Contains(playableId))
 			return "";
-		return m_mPlayablePrefabs[playableId];
-	}
-	// Set playable cached prefab name (ResourceName)
-	// - Execute ONLY on server
-	void SetPlayablePrefab(RplId playableId, ResourceName prefab)
-	{
-		Rpc(RPC_SetPlayablePrefab, playableId, prefab);
-		RPC_SetPlayablePrefab(playableId, prefab);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayablePrefab(RplId playableId, ResourceName prefab)
-	{
-		m_mPlayablePrefabs[playableId] = prefab;
+		return m_mPlayablePrefabs.Get(playableId);
 	}
 
-	// ------------------------------------ Playable name -----------------------------------------
-	// Get playable cached name by playable id
-	// - Synced on clients
+	void SetPlayablePrefab(RplId playableId, ResourceName prefab)
+	{
+		m_mPlayablePrefabs.Set(playableId, prefab);
+		Replication.BumpMe();
+	}
+
 	string GetPlayableName(RplId playableId)
 	{
 		if (!m_mPlayableNames.Contains(playableId))
 			return "";
-		return m_mPlayableNames[playableId];
-	}
-	// Set playable cached name by playable id
-	// - Execute ONLY on server
-	void SetPlayableName(RplId playableId, string name)
-	{
-		Rpc(RPC_SetPlayableName, playableId, name);
-		RPC_SetPlayableName(playableId, name);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayableName(RplId playableId, string name)
-	{
-		m_mPlayableNames[playableId] = name;
+		return m_mPlayableNames.Get(playableId);
 	}
 
-	// ---------------------- playable -> player / player -> playable links -----------------------
-	// Player -> Playable link
-	// Get player id by playable id or -1 if no player found
-	// - Synced on clients
+	void SetPlayableName(RplId playableId, string name)
+	{
+		m_mPlayableNames.Set(playableId, name);
+		Replication.BumpMe();
+	}
+
+	// ============================================================================================
+	// ============================== Player <-> Playable Links ===================================
+	// ============================================================================================
+
 	int GetPlayerByPlayable(RplId PlayableId)
 	{
 		if (!m_playablePlayers.Contains(PlayableId))
 			return -1;
-		return m_playablePlayers[PlayableId];
+		return m_playablePlayers.Get(PlayableId);
 	}
-	// Get last not -1 player id by playable id or -1 if no player found
-	// - Synced on clients
+
 	int GetPlayerByPlayableRemembered(RplId PlayableId)
 	{
-		if (!m_playersPlayableRemembered.Contains(PlayableId))
+		if (!m_playablePlayersRemembered.Contains(PlayableId))
 			return -1;
-		return m_playersPlayableRemembered[PlayableId];
+		return m_playablePlayersRemembered.Get(PlayableId);
 	}
-	// Set player -> playable / playable -> player links, by playable id to player id
-	// - Execute ONLY on server
+
+	RplId GetPlayableByPlayer(int playerId)
+	{
+		if (!m_playersPlayable.Contains(playerId))
+			return RplId.Invalid();
+		return m_playersPlayable.Get(playerId);
+	}
+
+	RplId GetPlayableByPlayerRemembered(int playerId)
+	{
+		if (!m_playersPlayableRemembered.Contains(playerId))
+			return RplId.Invalid();
+		return m_playersPlayableRemembered.Get(playerId);
+	}
+
 	void SetPlayablePlayer(RplId playableId, int playerId)
 	{
-		RPC_SetPlayablePlayer(playableId, playerId);
-		Rpc(RPC_SetPlayablePlayer, playableId, playerId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayablePlayer(RplId playableId, int playerId)
-	{
-		// Reset previous player - playable -> player link
+		RplId oldPlayable = RplId.Invalid();
 		if (playerId > 0) {
-			RplId oldPlayable = GetPlayableByPlayer(playerId);
+			oldPlayable = GetPlayableByPlayer(playerId);
 			if (oldPlayable != RplId.Invalid())
 			{
-				m_playablePlayers[oldPlayable] = -1;
+				m_playablePlayers.Set(oldPlayable, -1);
 			}
 			PS_PlayableContainer playableComponent = m_aPlayables.Get(oldPlayable);
 			if (playableComponent)
 				playableComponent.InvokeOnPlayerChanged(playerId, -1);
 		}
 
-		// Update both maps
-		m_playersPlayable[playerId] = playableId;
-		int oldPlayerId = m_playablePlayers[playableId];
-		m_playablePlayers[playableId] = playerId;
+		m_playersPlayable.Set(playerId, playableId);
+		int oldPlayerId = m_playablePlayers.Get(playableId);
+		m_playablePlayers.Set(playableId, playerId);
 		if (oldPlayerId > 0 && oldPlayerId != playerId)
-			m_playersPlayable[oldPlayerId] = -1;
-		
-		// Remember last valid
-		if (playableId != RplId.Invalid()) {
-			m_playablePlayersRemembered[playerId] = playableId;
-		}
-		
-		// Invoke if player valid
+			m_playersPlayable.Set(oldPlayerId, RplId.Invalid());
+
+		if (playableId != RplId.Invalid())
+			m_playersPlayableRemembered.Set(playerId, playableId);
+
 		if (playerId > 0)
 		{
-			m_playersPlayableRemembered[playableId] = playerId; // Remember last valid
+			m_playablePlayersRemembered.Set(playableId, playerId);
 			m_eOnPlayerPlayableChange.Invoke(playerId, playableId);
 		}
-		
-		// Invoke container event
+
 		PS_PlayableContainer playableContainer = m_aPlayables.Get(playableId);
 		if (playableContainer)
 			playableContainer.InvokeOnPlayerChanged(oldPlayerId, playerId);
+
+		Replication.BumpMe();
+		Rpc(RPC_NotifyPlayerPlayableChanged, playerId, playableId, oldPlayerId, oldPlayable);
 	}
 
-	// Playable -> Player link
-	// Get playable id by player id or RplId.Invalid() if no playable found
-	// - Synced on clients
-	RplId GetPlayableByPlayer(int playerId)
-	{
-		if (!m_playersPlayable.Contains(playerId))
-			return RplId.Invalid();
-		return m_playersPlayable[playerId];
-	}
-	// Get last not RplId.Invalid() playable id byt player id or RplId.Invalid() if no playable found
-	// - Synced on clients
-	RplId GetPlayableByPlayerRemembered(int playerId)
-	{
-		if (!m_playablePlayersRemembered.Contains(playerId))
-			return RplId.Invalid();
-		return m_playablePlayersRemembered[playerId];
-	}
-	// Set playable -> player / player -> playable links, by player id to playable id
-	// - Execute ONLY on server
 	void SetPlayerPlayable(int playerId, RplId playableId)
 	{
-		RPC_SetPlayerPlayable(playerId, playableId);
-		Rpc(RPC_SetPlayerPlayable, playerId, playableId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayerPlayable(int playerId, RplId playableId)
-	{
-		// Reset previous playable - playable -> player link
 		RplId oldPlayable = GetPlayableByPlayer(playerId);
 		if (oldPlayable != RplId.Invalid()) {
-			m_playablePlayers[oldPlayable] = -1;
+			m_playablePlayers.Set(oldPlayable, -1);
 			PS_PlayableContainer playableComponent = m_aPlayables.Get(oldPlayable);
 			if (playableComponent)
 				playableComponent.InvokeOnPlayerChanged(playerId, -1);
 		}
 
-		// Update both maps
-		m_playersPlayable[playerId] = playableId;
-		int oldPlayerId = m_playablePlayers[playableId];
-		m_playablePlayers[playableId] = playerId;
+		m_playersPlayable.Set(playerId, playableId);
+		int oldPlayerId = m_playablePlayers.Get(playableId);
+		m_playablePlayers.Set(playableId, playerId);
+		if (oldPlayerId > 0 && oldPlayerId != playerId)
+			m_playersPlayable.Set(oldPlayerId, RplId.Invalid());
 
-		// Remember last valid
-		if (playableId != RplId.Invalid()) {
-			m_playablePlayersRemembered[playerId] = playableId;
-		}
+		if (playableId != RplId.Invalid())
+			m_playersPlayableRemembered.Set(playerId, playableId);
 
-		// Invoke if playable valid
 		if (playerId > 0)
 		{
 			m_eOnPlayerPlayableChange.Invoke(playerId, playableId);
-			m_playersPlayableRemembered[playableId] = playerId; // Remember last valid
+			m_playablePlayersRemembered.Set(playableId, playerId);
 		}
 
-		// Invoke container event
 		PS_PlayableContainer playableComponent = m_aPlayables.Get(playableId);
 		if (playableComponent)
 			playableComponent.InvokeOnPlayerChanged(oldPlayerId, playerId);
+
+		Replication.BumpMe();
+		Rpc(RPC_NotifyPlayerPlayableChanged, playerId, playableId, oldPlayerId, oldPlayable);
 	}
-	
-	// ------------------------------ Current playable controller ----------------------------------
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_NotifyPlayerPlayableChanged(int playerId, RplId playableId, int oldPlayerId, RplId oldPlayable)
+	{
+		if (oldPlayable != RplId.Invalid())
+		{
+			PS_PlayableContainer oldContainer = m_aPlayables.Get(oldPlayable);
+			if (oldContainer)
+				oldContainer.InvokeOnPlayerChanged(playerId, -1);
+		}
+
+		if (playerId > 0)
+			m_eOnPlayerPlayableChange.Invoke(playerId, playableId);
+
+		PS_PlayableContainer playableContainer = m_aPlayables.Get(playableId);
+		if (playableContainer)
+			playableContainer.InvokeOnPlayerChanged(oldPlayerId, playerId);
+	}
+
+	// ============================================================================================
+	// =========================== Playable Group / Vehicle / Pin =================================
+	// ============================================================================================
+
 	static PS_PlayableControllerComponent GetPlayableController()
 	{
 		return s_CurrentPlayableController;
 	}
 
-	// ----------------------------- Playable to players group link --------------------------------
-	// Get players group by playable id or null if no group found
-	// - Synced on clients
 	SCR_AIGroup GetPlayerGroupByPlayable(RplId PlayableId)
 	{
 		if (!m_playablePlayerGroupId.Contains(PlayableId))
 			return null;
-
 		SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
-		return groupsManagerComponent.FindGroup(m_playablePlayerGroupId[PlayableId]);
+		return groupsManagerComponent.FindGroup(m_playablePlayerGroupId.Get(PlayableId));
 	}
-	// Get players group int callsign by playable id or -1 if no group found
-	// - Synced on clients
+
 	int GetGroupCallsignByPlayable(RplId PlayableId)
 	{
 		SCR_AIGroup group = GetPlayerGroupByPlayable(PlayableId);
 		if (!group)
 			return -1;
-
 		return group.GetCallsignNum();
 	}
-	// Set playable players group id
-	// - Execute ONLY on server
+
 	void SetPlayablePlayerGroupId(RplId PlayableId, int groupId)
 	{
-		RPC_SetPlayablePlayerGroupId(PlayableId, groupId);
-		Rpc(RPC_SetPlayablePlayerGroupId, PlayableId, groupId);
+		m_playablePlayerGroupId.Set(PlayableId, groupId);
+		Replication.BumpMe();
+
+		UpdatePlayablesSorted();
+		SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
+		m_eOnPlayableChangeGroup.Invoke(PlayableId, GetPlayableById(PlayableId), groupsManagerComponent.FindGroup(groupId));
+
+		Rpc(RPC_NotifyGroupChanged, PlayableId, groupId);
 	}
+
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayablePlayerGroupId(RplId PlayableId, int groupId)
+	protected void RPC_NotifyGroupChanged(RplId PlayableId, int groupId)
 	{
-		m_playablePlayerGroupId[PlayableId] = groupId;
-		UpdatePlayablesSorted(); // Group added resort list (TODO: check is it required)
+		UpdatePlayablesSorted();
 		SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
 		m_eOnPlayableChangeGroup.Invoke(PlayableId, GetPlayableById(PlayableId), groupsManagerComponent.FindGroup(groupId));
 	}
 
-	// --------------------------- Vehicle to players group link ----------------------------------
-	// Get players group by vehicle container or null if no group found
-	// - Synced on clients
 	SCR_AIGroup GetPlayerGroupByVehicle(PS_PlayableVehicleContainer playableVehicleContainer)
 	{
 		SCR_GroupsManagerComponent groupsManagerComponent = SCR_GroupsManagerComponent.GetInstance();
 		return groupsManagerComponent.FindGroup(playableVehicleContainer.m_iGroupId);
 	}
-	
-	// -------------------------------- Vehicle lock state ----------------------------------------
+
 	void SetPlayableVehicleLocked(RplId vehicleId, bool lock)
 	{
-		RPC_SetPlayableVehicleLocked(vehicleId, lock);
-		Rpc(RPC_SetPlayableVehicleLocked, vehicleId, lock);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	void RPC_SetPlayableVehicleLocked(RplId vehicleId, bool lock)
-	{
-		if (!m_mPlayableVehicles.Contains(vehicleId))
+		PS_PlayableVehicleContainer container = m_mPlayableVehicles.Get(vehicleId);
+		if (!container)
 			return;
-		m_mPlayableVehicles[vehicleId].SetLock(lock);
+		container.SetLock(lock);
+		Replication.BumpMe();
 	}
 
-	// ---------------------------------- Player pin state ----------------------------------------
-	// Get player pinned state
-	// - Synced on clients
 	bool GetPlayerPin(int playerId)
 	{
 		if (!m_playersPin.Contains(playerId))
 			return false;
-		return m_playersPin[playerId];
+		return m_playersPin.Get(playerId);
 	}
-	// Set player pin state
-	// - Execute ONLY on server
+
 	void SetPlayerPin(int playerId, bool pined)
 	{
-		RPC_SetPlayerPin(playerId, pined);
-		Rpc(RPC_SetPlayerPin, playerId, pined);
+		m_playersPin.Set(playerId, pined);
+		Replication.BumpMe();
+
+		m_eOnPlayerPinChange.Invoke(playerId, pined);
+		RplId playableId = GetPlayableByPlayer(playerId);
+		if (playableId != RplId.Invalid())
+		{
+			PS_PlayableContainer playableComponent = m_aPlayables.Get(playableId);
+			if (playableComponent)
+				playableComponent.GetOnPlayerPinChange().Invoke(pined);
+		}
+
+		Rpc(RPC_NotifyPinChanged, playerId, pined);
 	}
+
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_SetPlayerPin(int playerId, bool pined)
+	protected void RPC_NotifyPinChanged(int playerId, bool pined)
 	{
-		m_playersPin[playerId] = pined;
 		m_eOnPlayerPinChange.Invoke(playerId, pined);
 		RplId playableId = GetPlayableByPlayer(playerId);
 		if (playableId != RplId.Invalid())
@@ -1030,22 +1018,18 @@ class PS_PlayableManager : ScriptComponent
 				playableComponent.GetOnPlayerPinChange().Invoke(pined);
 		}
 	}
-	
-	// ------------------------------- Max server players count -----------------------------------
-	// Get max players server count
-	// - Synced on clients
+
 	int GetMaxPlayers()
 	{
 		return m_iMaxPlayersCount;
 	}
-	
-	// --------------------------------------------------------------------------------------------
-	// ----------------------------------- Client requests ----------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Send message to player when he got kicked from playable slot
+
+	// ============================================================================================
+	// ================================== Client Requests =========================================
+	// ============================================================================================
+
 	void NotifyKick(int playerId)
 	{
-		// Route through the player's own controller for targeted Owner delivery
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(m_PlayerManager.GetPlayerController(playerId));
 		if (!playerController)
 			return;
@@ -1054,13 +1038,9 @@ class PS_PlayableManager : ScriptComponent
 			return;
 		playableController.NotifyKickOwner();
 	}
-	
-	// --------------------------------------------------------------------------------------------
-	// Force switch player state to game, for proper playable apply
-	// Or else player can stack in other menu
+
 	void ForceSwitch(int playerId)
 	{
-		// Route through the player's own controller for targeted Owner delivery
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(m_PlayerManager.GetPlayerController(playerId));
 		if (!playerController)
 			return;
@@ -1070,11 +1050,10 @@ class PS_PlayableManager : ScriptComponent
 		playableController.SwitchToMenuServer(SCR_EGameModeState.GAME);
 	}
 
+	// ============================================================================================
+	// ======================================= Events =============================================
+	// ============================================================================================
 
-	// --------------------------------------------------------------------------------------------
-	// ------------------------------------------ Events ------------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Already replicated to clients by vanilla, just raise custom event
 	protected void OnPlayerConnected(int playerId)
 	{
 		RplId playableId = GetPlayableByPlayer(playerId);
@@ -1083,8 +1062,6 @@ class PS_PlayableManager : ScriptComponent
 			playableContainer.GetOnPlayerConnected().Invoke(playerId);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Manually replicate and invoke player disconnect event on all clients and server
 	protected void OnPlayerDisconnected(int playerId, KickCauseCode cause = KickCauseCode.NONE, int timeout = -1)
 	{
 		Rpc(RPC_OnPlayerDisconnected, playerId, cause, timeout);
@@ -1100,8 +1077,6 @@ class PS_PlayableManager : ScriptComponent
 		m_eOnPlayerDisconnected.Invoke(playerId, cause, timeout);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Player got/lost admin role 
 	protected void OnPlayerRoleChange(int playerId, EPlayerRole roleFlags)
 	{
 		RplId playableId = GetPlayableByPlayer(playerId);
@@ -1110,113 +1085,10 @@ class PS_PlayableManager : ScriptComponent
 			playableContainer.GetOnPlayerRoleChange().Invoke(playerId, roleFlags);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// -------------------------------- Reconnect ID remapping ------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Track player GUID on connect (server-only)
-	void TrackPlayerGUID(int playerId)
-	{
-		if (!Replication.IsServer())
-			return;
+	// ============================================================================================
+	// =================================== Damage State ===========================================
+	// ============================================================================================
 
-		string guid = GetGame().GetBackendApi().GetPlayerIdentityId(playerId);
-		if (guid == "")
-			return;
-
-		m_mGUIDtoPlayerId[guid] = playerId;
-		m_mPlayerIdToGUID[playerId] = guid;
-	}
-
-	// Mark player as disconnected for GUID-based reconnect (server-only)
-	void TrackPlayerDisconnect(int playerId)
-	{
-		if (!Replication.IsServer())
-			return;
-
-		string guid;
-		if (!m_mPlayerIdToGUID.Find(playerId, guid))
-			return;
-
-		m_mDisconnectedGUIDs[guid] = playerId;
-	}
-
-	// Check if a connecting player is a reconnect. Returns old playerId or -1 if not a reconnect.
-	// If reconnect detected, remaps all maps from oldId to newId. (server-only)
-	int TryHandleReconnect(int newPlayerId)
-	{
-		if (!Replication.IsServer())
-			return -1;
-
-		string guid = GetGame().GetBackendApi().GetPlayerIdentityId(newPlayerId);
-		if (guid == "")
-			return -1;
-
-		int oldPlayerId;
-		if (!m_mDisconnectedGUIDs.Find(guid, oldPlayerId))
-			return -1;
-
-		// Found a reconnect — clean up disconnect tracking
-		m_mDisconnectedGUIDs.Remove(guid);
-
-		// Update GUID tracking to new player ID
-		m_mGUIDtoPlayerId[guid] = newPlayerId;
-		m_mPlayerIdToGUID.Remove(oldPlayerId);
-		m_mPlayerIdToGUID[newPlayerId] = guid;
-
-		// Remap all maps if player ID changed
-		if (oldPlayerId != newPlayerId)
-		{
-			RemapPlayerIds(oldPlayerId, newPlayerId);
-		}
-
-		return oldPlayerId;
-	}
-
-	// Remap all player-ID-keyed maps from oldId to newId, broadcast to all clients
-	protected void RemapPlayerIds(int oldPlayerId, int newPlayerId)
-	{
-		RPC_RemapPlayerIds(oldPlayerId, newPlayerId);
-		Rpc(RPC_RemapPlayerIds, oldPlayerId, newPlayerId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RPC_RemapPlayerIds(int oldPlayerId, int newPlayerId)
-	{
-		// Remap player-ID-keyed maps (key = playerId)
-		RemapKeyInt(m_playersStates, oldPlayerId, newPlayerId);
-		RemapKeyInt(m_playersPlayable, oldPlayerId, newPlayerId);
-		RemapKeyInt(m_playersPlayableRemembered, oldPlayerId, newPlayerId);
-		RemapKeyInt(m_playersPin, oldPlayerId, newPlayerId);
-		RemapKeyInt(m_playersFaction, oldPlayerId, newPlayerId);
-		RemapKeyInt(m_playersFactionRemembered, oldPlayerId, newPlayerId);
-		RemapKeyInt(m_playersLastName, oldPlayerId, newPlayerId);
-
-		// Remap RplId-keyed maps where player ID is the VALUE
-		foreach (RplId rplId, int pid : m_playablePlayers)
-		{
-			if (pid == oldPlayerId)
-				m_playablePlayers[rplId] = newPlayerId;
-		}
-		foreach (RplId rplId, int pid : m_playablePlayersRemembered)
-		{
-			if (pid == oldPlayerId)
-				m_playablePlayersRemembered[rplId] = newPlayerId;
-		}
-
-		// Remap VoN room assignment
-		PS_VoNRoomsManager vonManager = PS_VoNRoomsManager.GetInstance();
-		if (vonManager)
-			vonManager.RemapPlayerId(oldPlayerId, newPlayerId);
-	}
-
-	// Helper: remap a key in any int-keyed map
-	private void RemapKeyInt(map<int, PS_EPlayableControllerState> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
-	private void RemapKeyInt(map<int, RplId> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
-	private void RemapKeyInt(map<int, bool> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
-	private void RemapKeyInt(map<int, FactionKey> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
-	private void RemapKeyInt(map<int, string> m, int oldKey, int newKey) { if (m.Contains(oldKey)) { m[newKey] = m[oldKey]; m.Remove(oldKey); } }
-
-	// --------------------------------------------------------------------------------------------
-	// Manually replicate and invoke damage state change event on all clients and server
 	void OnPlayableDamageStateChanged(RplId playableId, EDamageState damageState)
 	{
 		Rpc(RPC_OnPlayableDamageStateChanged, playableId, damageState);
@@ -1225,16 +1097,103 @@ class PS_PlayableManager : ScriptComponent
 	[RplRpc(RplChannel.Unreliable, RplRcver.Broadcast)]
 	protected void RPC_OnPlayableDamageStateChanged(RplId playableId, EDamageState damageState)
 	{
-		if (!m_aPlayables.Contains(playableId))
+		PS_PlayableContainer container = m_aPlayables.Get(playableId);
+		if (!container)
 			return;
-		m_aPlayables[playableId].OnDamageStateChanged(damageState);
+		container.OnDamageStateChanged(damageState);
 	}
 
+	// ============================================================================================
+	// ================================ Reconnect ID Remapping ====================================
+	// ============================================================================================
 
-	// --------------------------------------------------------------------------------------------
-	// ------------------------------------ Util global -------------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Remove playable entities without link to player
+	void TrackPlayerGUID(int playerId)
+	{
+		if (!Replication.IsServer())
+			return;
+		string guid = GetGame().GetBackendApi().GetPlayerIdentityId(playerId);
+		if (guid == "")
+			return;
+		m_mGUIDtoPlayerId[guid] = playerId;
+		m_mPlayerIdToGUID[playerId] = guid;
+	}
+
+	void TrackPlayerDisconnect(int playerId)
+	{
+		if (!Replication.IsServer())
+			return;
+		string guid;
+		if (!m_mPlayerIdToGUID.Find(playerId, guid))
+			return;
+		m_mDisconnectedGUIDs[guid] = playerId;
+	}
+
+	int TryHandleReconnect(int newPlayerId)
+	{
+		if (!Replication.IsServer())
+			return -1;
+		string guid = GetGame().GetBackendApi().GetPlayerIdentityId(newPlayerId);
+		if (guid == "")
+			return -1;
+		int oldPlayerId;
+		if (!m_mDisconnectedGUIDs.Find(guid, oldPlayerId))
+			return -1;
+
+		m_mDisconnectedGUIDs.Remove(guid);
+		m_mGUIDtoPlayerId[guid] = newPlayerId;
+		m_mPlayerIdToGUID.Remove(oldPlayerId);
+		m_mPlayerIdToGUID[newPlayerId] = guid;
+
+		if (oldPlayerId != newPlayerId)
+			RemapPlayerIds(oldPlayerId, newPlayerId);
+
+		return oldPlayerId;
+	}
+
+	protected void RemapPlayerIds(int oldPlayerId, int newPlayerId)
+	{
+		RPC_RemapPlayerIds(oldPlayerId, newPlayerId);
+		Replication.BumpMe();
+		Rpc(RPC_RemapPlayerIds, oldPlayerId, newPlayerId);
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RPC_RemapPlayerIds(int oldPlayerId, int newPlayerId)
+	{
+		RemapKey(m_playersStates, oldPlayerId, newPlayerId);
+		RemapKey(m_playersPlayable, oldPlayerId, newPlayerId);
+		RemapKey(m_playersPlayableRemembered, oldPlayerId, newPlayerId);
+		RemapKey(m_playersPin, oldPlayerId, newPlayerId);
+		RemapKey(m_playersFaction, oldPlayerId, newPlayerId);
+		RemapKey(m_playersFactionRemembered, oldPlayerId, newPlayerId);
+		RemapKey(m_playersLastName, oldPlayerId, newPlayerId);
+
+		for (int i = 0; i < m_playablePlayers.Count(); i++)
+		{
+			if (m_playablePlayers.GetElement(i) == oldPlayerId)
+				m_playablePlayers.Set(m_playablePlayers.GetKey(i), newPlayerId);
+		}
+		for (int i = 0; i < m_playablePlayersRemembered.Count(); i++)
+		{
+			if (m_playablePlayersRemembered.GetElement(i) == oldPlayerId)
+				m_playablePlayersRemembered.Set(m_playablePlayersRemembered.GetKey(i), newPlayerId);
+		}
+
+		PS_VoNRoomsManager vonManager = PS_VoNRoomsManager.GetInstance();
+		if (vonManager)
+			vonManager.RemapPlayerId(oldPlayerId, newPlayerId);
+	}
+
+	private void RemapKey(PS_ReplicatedBasicMap<int, int> m, int oldKey, int newKey) { int val; if (m.Find(oldKey, val)) { m.Set(newKey, val); m.Remove(oldKey); } }
+	private void RemapKey(PS_ReplicatedBasicMap<int, RplId> m, int oldKey, int newKey) { RplId val; if (m.Find(oldKey, val)) { m.Set(newKey, val); m.Remove(oldKey); } }
+	private void RemapKey(PS_ReplicatedBasicMap<int, bool> m, int oldKey, int newKey) { bool val; if (m.Find(oldKey, val)) { m.Set(newKey, val); m.Remove(oldKey); } }
+	private void RemapKey(PS_ReplicatedBasicMap<int, FactionKey> m, int oldKey, int newKey) { FactionKey val; if (m.Find(oldKey, val)) { m.Set(newKey, val); m.Remove(oldKey); } }
+	private void RemapKey(PS_ReplicatedBasicMap<int, string> m, int oldKey, int newKey) { string val; if (m.Find(oldKey, val)) { m.Set(newKey, val); m.Remove(oldKey); } }
+
+	// ============================================================================================
+	// ======================================= Utilities ==========================================
+	// ============================================================================================
+
 	void RemoveRedundantUnits()
 	{
 		for (int i = 0; i < m_aPlayables.Count(); i++)
@@ -1251,8 +1210,8 @@ class PS_PlayableManager : ScriptComponent
 				}
 			}
 		}
-		
-		foreach (RplId vehicleId, PS_PlayableVehicleContainer playableVehicleContainer : m_mPlayableVehicles)
+
+		foreach (RplId vehicleId, PS_PlayableVehicleContainer playableVehicleContainer : m_mPlayableVehicles.GetRawMap())
 		{
 			if (playableVehicleContainer.GetLock())
 			{
@@ -1266,27 +1225,23 @@ class PS_PlayableManager : ScriptComponent
 			}
 		}
 	}
-	// --------------------------------------------------------------------------------------------
-	// Holster weapon on all playables (TODO: check weapon stuck bug)
+
 	void HolsterWeapons()
 	{
 		if (!Replication.IsServer())
 			return;
 
-		foreach (RplId id, PS_PlayableContainer playable : m_aPlayables)
+		foreach (RplId id, PS_PlayableContainer playable : m_aPlayables.GetRawMap())
 		{
 			playable.GetPlayableComponent().HolsterWeapon();
 		}
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// Sort playables cached list by CallSign -> Rank -> RplId
 	protected void UpdatePlayablesSorted()
 	{
 		array<PS_PlayableContainer> playablesSorted = {};
 		map<RplId, ref PS_PlayableContainer> playables = GetPlayables();
 
-		// Rerange playables from global list
 		foreach (RplId playableId, PS_PlayableContainer playable : playables)
 		{
 			if (!playable)
@@ -1304,32 +1259,25 @@ class PS_PlayableManager : ScriptComponent
 				bool callSignEquival = callSignS == callSign;
 				bool callSignGreater = callSignS > callSign;
 
-				// CallSign -> Rank -> RplId
 				if ((((rplIdGreater && rankEquival) || rankGreater) && callSignEquival) || callSignGreater) {
 					playablesSorted.InsertAt(playable, s);
 					isInserted = true;
 					break;
 				}
 			}
-			if (!isInserted) {
+			if (!isInserted)
 				playablesSorted.Insert(playable);
-			}
 		}
 
-		// Update cached list
 		m_aPlayablesSorted = playablesSorted;
 	}
-	// One frame delay
+
 	protected void UpdatePlayablesSortedDelayed()
 	{
 		m_CallQueue.Remove(UpdatePlayablesSorted);
 		m_CallQueue.Call(UpdatePlayablesSorted);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// ---------------------------------------- Util ----------------------------------------------
-	// --------------------------------------------------------------------------------------------
-	// Check is player control group leader playable
 	bool IsPlayerGroupLeader(int thisPlayerId)
 	{
 		if (thisPlayerId == -1)
@@ -1357,104 +1305,6 @@ class PS_PlayableManager : ScriptComponent
 				continue;
 			return false;
 		}
-
-		return true;
-	}
-
-	// --------------------------------------------------------------------------------------------
-	// ------------------------------------ Replication -------------------------------------------
-	// --------------------------------------------------------------------------------------------
-	override protected bool RplSave(ScriptBitWriter writer)
-	{
-		// Save maps
-		PS_ReplicationHelper.WriteMapIntInt(writer, m_playersStates);
-		PS_ReplicationHelper.WriteMapIntRplId(writer, m_playersPlayable);
-		PS_ReplicationHelper.WriteMapRplIdInt(writer, m_playablePlayers);
-		PS_ReplicationHelper.WriteMapIntBool(writer, m_playersPin);
-		PS_ReplicationHelper.WriteMapIntFactionKey(writer, m_playersFaction);
-		PS_ReplicationHelper.WriteMapIntFactionKey(writer, m_playersFactionRemembered);
-		PS_ReplicationHelper.WriteMapRplIdInt(writer, m_playablePlayerGroupId);
-		PS_ReplicationHelper.WriteMapIntString(writer, m_playersLastName);
-		PS_ReplicationHelper.WriteMapIntRplId(writer, m_playersPlayableRemembered);
-		PS_ReplicationHelper.WriteMapRplIdInt(writer, m_playablePlayersRemembered);
-		PS_ReplicationHelper.WriteMapFactionKeyInt(writer, m_mFactionReady);
-		PS_ReplicationHelper.WriteMapRplIdString(writer, m_mPlayablePrefabs);
-		PS_ReplicationHelper.WriteMapRplIdString(writer, m_mPlayableNames);
-
-		// Save containers
-		int playablesCount = m_aPlayables.Count();
-		writer.WriteInt(playablesCount);
-		foreach (RplId id, PS_PlayableContainer container : m_aPlayables)
-		{
-			container.Save(writer);
-		}
-
-		int playableVehiclessCount = m_mPlayableVehicles.Count();
-		writer.WriteInt(playableVehiclessCount);
-		foreach (RplId id, PS_PlayableVehicleContainer container : m_mPlayableVehicles)
-		{
-			container.Save(writer);
-		}
-
-		return true;
-	}
-
-	// --------------------------------------------------------------------------------------------
-	override protected bool RplLoad(ScriptBitReader reader)
-	{
-		// Clear existing data to prevent duplicates on re-stream
-		m_playersStates.Clear();
-		m_playersPlayable.Clear();
-		m_playablePlayers.Clear();
-		m_playersPin.Clear();
-		m_playersFaction.Clear();
-		m_playersFactionRemembered.Clear();
-		m_playablePlayerGroupId.Clear();
-		m_playersLastName.Clear();
-		m_playersPlayableRemembered.Clear();
-		m_playablePlayersRemembered.Clear();
-		m_mFactionReady.Clear();
-		m_mPlayablePrefabs.Clear();
-		m_mPlayableNames.Clear();
-		m_aPlayables.Clear();
-		m_aPlayablesSorted.Clear();
-		m_mPlayableVehicles.Clear();
-
-		// Load maps
-		PS_ReplicationHelper.ReadMapIntInt(reader, m_playersStates);
-		PS_ReplicationHelper.ReadMapIntRplId(reader, m_playersPlayable);
-		PS_ReplicationHelper.ReadMapRplIdInt(reader, m_playablePlayers);
-		PS_ReplicationHelper.ReadMapIntBool(reader, m_playersPin);
-		PS_ReplicationHelper.ReadMapIntFactionKey(reader, m_playersFaction);
-		PS_ReplicationHelper.ReadMapIntFactionKey(reader, m_playersFactionRemembered);
-		PS_ReplicationHelper.ReadMapRplIdInt(reader, m_playablePlayerGroupId);
-		PS_ReplicationHelper.ReadMapIntString(reader, m_playersLastName);
-		PS_ReplicationHelper.ReadMapIntRplId(reader, m_playersPlayableRemembered);
-		PS_ReplicationHelper.ReadMapRplIdInt(reader, m_playablePlayersRemembered);
-		PS_ReplicationHelper.ReadMapFactionKeyInt(reader, m_mFactionReady);
-		PS_ReplicationHelper.ReadMapRplIdString(reader, m_mPlayablePrefabs);
-		PS_ReplicationHelper.ReadMapRplIdString(reader, m_mPlayableNames);
-
-		// Load containers
-		int playablesCount;
-		reader.ReadInt(playablesCount);
-		for (int i = 0; i < playablesCount; i++)
-		{
-			PS_PlayableContainer container = new PS_PlayableContainer();
-			container.Load(reader);
-			RPC_RegisterPlayable(container);
-		}
-
-		int playableVehiclesCount;
-		reader.ReadInt(playableVehiclesCount);
-		for (int i = 0; i < playableVehiclesCount; i++)
-		{
-			PS_PlayableVehicleContainer container = new PS_PlayableVehicleContainer();
-			container.Load(reader);
-			RPC_RegisterGroupVehicle(container);
-		}
-
-		m_bRplLoaded = true;
 
 		return true;
 	}

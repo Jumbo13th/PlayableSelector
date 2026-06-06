@@ -347,6 +347,13 @@ class PS_SpectatorMenu: MenuBase
 		PlayerController playerController = GetGame().GetPlayerController();
 		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
 		playableController.MoveToVoNRoom(playerController.GetPlayerId(), "", "#PS-VoNRoom_Global");
+		GetGame().GetCallqueue().CallLater(RoomSwitchToGlobalDelayed, 500, false);
+	}
+
+	void RoomSwitchToGlobalDelayed()
+	{
+		if (m_hVoiceChatList)
+			m_hVoiceChatList.SwitchFaction("");
 	}
 	
 	void InitChat()

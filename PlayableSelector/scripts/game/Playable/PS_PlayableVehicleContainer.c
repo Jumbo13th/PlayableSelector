@@ -73,26 +73,30 @@ class PS_PlayableVehicleContainer
 		return true;
 	}
 
-	static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs , ScriptCtx ctx)
+	static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
 	{
-		return lhs.CompareSnapshots(rhs, 4)
-		    && lhs.CompareStringSnapshots(rhs)
-		    && lhs.CompareStringSnapshots(rhs)
-		    && lhs.CompareSnapshots(rhs, 4)
-		    && lhs.CompareSnapshots(rhs, 4)
-		    && lhs.CompareStringSnapshots(rhs)
-		    && lhs.CompareSnapshots(rhs, 4);
+		bool same = true;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		return same;
 	}
 
 	static bool PropCompare(PS_PlayableVehicleContainer instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
 	{
-		return snapshot.CompareInt(instance.m_iRplId)
-		    && snapshot.CompareString(instance.m_sPrefabName)
-		    && snapshot.CompareString(instance.m_sIconPath)
-		    && snapshot.CompareInt(instance.m_iGroupCallsign)
-		    && snapshot.CompareInt(instance.m_iGroupId)
-		    && snapshot.CompareString(instance.m_sFactionKey)
-		    && snapshot.CompareInt(instance.m_iLocked);
+		bool same = true;
+		if (!snapshot.CompareInt(instance.m_iRplId)) same = false;
+		if (!snapshot.CompareString(instance.m_sPrefabName)) same = false;
+		if (!snapshot.CompareString(instance.m_sIconPath)) same = false;
+		if (!snapshot.CompareInt(instance.m_iGroupCallsign)) same = false;
+		if (!snapshot.CompareInt(instance.m_iGroupId)) same = false;
+		if (!snapshot.CompareString(instance.m_sFactionKey)) same = false;
+		if (!snapshot.CompareInt(instance.m_iLocked)) same = false;
+		return same;
 	}
 	
 	void Save(ScriptBitWriter writer)

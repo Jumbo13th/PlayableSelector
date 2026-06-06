@@ -77,26 +77,31 @@ class PS_PlayableContainer
 
 	static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
 	{
-		return lhs.CompareSnapshots(rhs, 4)
-			&& lhs.CompareStringSnapshots(rhs)
-			&& lhs.CompareStringSnapshots(rhs)
-			&& lhs.CompareSnapshots(rhs, 4)
-			&& lhs.CompareStringSnapshots(rhs)
-			&& lhs.CompareStringSnapshots(rhs)
-			&& lhs.CompareStringSnapshots(rhs)
-			&& lhs.CompareSnapshots(rhs, 4);
+		bool same = true;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareStringSnapshots(rhs)) same = false;
+		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
+		return same;
 	}
 
 	static bool PropCompare(PS_PlayableContainer instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
 	{
-		return snapshot.CompareInt(instance.m_RplId)
-			&& snapshot.CompareString(instance.m_sName)
-			&& snapshot.CompareString(instance.m_FactionKey)
-			&& snapshot.CompareInt(instance.m_eCharacterRank)
-			&& snapshot.CompareString(instance.m_sRoleIconPath)
-			&& snapshot.CompareString(instance.m_sRoleIconQuad)
-			&& snapshot.CompareString(instance.m_sRoleName)
-			&& snapshot.CompareInt(instance.m_eDamageState);
+		// Must consume ALL bytes even when a difference is found.
+		bool same = true;
+		if (!snapshot.CompareInt(instance.m_RplId)) same = false;
+		if (!snapshot.CompareString(instance.m_sName)) same = false;
+		if (!snapshot.CompareString(instance.m_FactionKey)) same = false;
+		if (!snapshot.CompareInt(instance.m_eCharacterRank)) same = false;
+		if (!snapshot.CompareString(instance.m_sRoleIconPath)) same = false;
+		if (!snapshot.CompareString(instance.m_sRoleIconQuad)) same = false;
+		if (!snapshot.CompareString(instance.m_sRoleName)) same = false;
+		if (!snapshot.CompareInt(instance.m_eDamageState)) same = false;
+		return same;
 	}
 
 	void Save(ScriptBitWriter writer)
