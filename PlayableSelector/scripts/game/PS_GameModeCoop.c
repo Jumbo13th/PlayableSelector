@@ -8,7 +8,7 @@ class PS_GameModeCoopClass : SCR_BaseGameModeClass
 
 class PS_GameModeCoop : SCR_BaseGameMode
 {
-	[Attribute("120000", UIWidgets.EditBox, "Time during which disconnected players reserve role for reconnection in ms, -1 for infinity time", "", category: "Reforger Lobby")]
+	[RplProp(), Attribute("120000", UIWidgets.EditBox, "Time during which disconnected players reserve role for reconnection in ms, -1 for infinity time", "", category: "Reforger Lobby")]
 	int m_iReconnectTime;
 
 	[Attribute("-1", UIWidgets.EditBox, "Time during which disconnected players reserve role for reconnection in ms, -1 for infinity time", "", category: "Reforger Lobby")]
@@ -20,7 +20,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	[Attribute("0", uiwidget: UIWidgets.CheckBox, "Anyone can open lobby in game stage.", category: "Reforger Lobby")]
 	protected bool m_bTeamSwitch;
 
-	//[Attribute("0", uiwidget: UIWidgets.CheckBox, "Faction locked after selection.", category: "Reforger Lobby")]
+	[RplProp()]
 	protected bool m_bFactionLock;
 
 	[Attribute("0", uiwidget: UIWidgets.CheckBox, "Markers can be placed only by squad leaders and only on briefing.", category: "Reforger Lobby")]
@@ -35,7 +35,7 @@ class PS_GameModeCoop : SCR_BaseGameMode
 	[Attribute("0", uiwidget: UIWidgets.CheckBox, "Remove default markers on squad leaders.", category: "Reforger Lobby")]
 	protected bool m_bRemoveSquadMarkers;
 
-	[Attribute("60000", UIWidgets.EditBox, "Time in milliseconds before restriction zones are removed.", category: "Reforger Lobby")]
+	[RplProp(), Attribute("60000", UIWidgets.EditBox, "Time in milliseconds before restriction zones are removed.", category: "Reforger Lobby")]
 	int m_iFreezeTime;
 	
 	[Attribute("0", UIWidgets.EditBox, "Time in milliseconds before characters are activated.", category: "Reforger Lobby (WIP)")]
@@ -1272,24 +1272,6 @@ class PS_GameModeCoop : SCR_BaseGameMode
 		m_bTeamSwitch = canOpenLobbyInGame;
 	}
 
-	// ------------------------------------------ JIP Replication ------------------------------------------
-	override bool RplSave(ScriptBitWriter writer)
-	{
-		writer.WriteBool(m_bFactionLock);
-		writer.WriteInt(m_iFreezeTime);
-		writer.WriteInt(m_iReconnectTime);
-
-		return true;
-	}
-
-	override bool RplLoad(ScriptBitReader reader)
-	{
-		reader.ReadBool(m_bFactionLock);
-		reader.ReadInt(m_iFreezeTime);
-		reader.ReadInt(m_iReconnectTime);
-
-		return true;
-	}
 }
 
 [BaseContainerProps()]

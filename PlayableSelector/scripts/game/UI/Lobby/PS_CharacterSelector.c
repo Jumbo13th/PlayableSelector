@@ -475,18 +475,10 @@ class PS_CharacterSelector : SCR_ButtonComponent
 			}
 			
 			SCR_UISoundEntity.SoundEvent("SOUND_HUD_GADGET_SELECT");
-			m_PlayableControllerComponent.MoveToVoNRoom(playerId, m_sFactionKey, m_sPlayableCallsign);
-			m_PlayableControllerComponent.ChangeFactionKey(playerId, m_sFactionKey);
-			m_PlayableControllerComponent.SetPlayerState(playerId, PS_EPlayableControllerState.NotReady);	
-			m_PlayableControllerComponent.SetPlayerPlayable(playerId, m_iPlayableId);
+			m_PlayableControllerComponent.TakeSlot(playerId, m_iPlayableId);
 		} else {
 			SCR_UISoundEntity.SoundEvent("SOUND_HUD_GADGET_SELECT");
-			m_PlayableControllerComponent.MoveToVoNRoom(playerId, m_sFactionKey, "#PS-VoNRoom_Faction");
-			m_PlayableControllerComponent.ChangeFactionKey(playerId, "");
-			m_PlayableControllerComponent.SetPlayerState(playerId, PS_EPlayableControllerState.NotReady);
-			m_PlayableControllerComponent.SetPlayerPlayable(playerId, RplId.Invalid());
-			if (PS_PlayersHelper.IsAdminOrServer())
-				m_PlayableControllerComponent.UnpinPlayer(playerId);
+			m_PlayableControllerComponent.LeaveSlot(playerId);
 		}
 		
 		if (PS_PlayersHelper.IsAdminOrServer() && playerId != m_iCurrentPlayerId && gameState == SCR_EGameModeState.GAME)
@@ -576,12 +568,7 @@ class PS_CharacterSelector : SCR_ButtonComponent
 			return;
 		
 		SCR_UISoundEntity.SoundEvent("SOUND_LOBBY_KICK");
-		m_PlayableControllerComponent.MoveToVoNRoom(m_iPlayerId, m_sFactionKey, "#PS-VoNRoom_Faction");
-		m_PlayableControllerComponent.ChangeFactionKey(m_iPlayerId, "");
-		m_PlayableControllerComponent.SetPlayerState(m_iPlayerId, PS_EPlayableControllerState.NotReady);
-		m_PlayableControllerComponent.SetPlayerPlayable(m_iPlayerId, -1);
-		if (PS_PlayersHelper.IsAdminOrServer())
-			m_PlayableControllerComponent.UnpinPlayer(m_iPlayerId);
+		m_PlayableControllerComponent.LeaveSlot(m_iPlayerId);
 	}
 	
 	// --------------------------------------------------------------------------------------------------------------------------------
@@ -602,12 +589,7 @@ class PS_CharacterSelector : SCR_ButtonComponent
 				break;
 			case PS_ECharacterState.Kick:
 				SCR_UISoundEntity.SoundEvent("SOUND_LOBBY_KICK");
-				m_PlayableControllerComponent.MoveToVoNRoom(m_iPlayerId, m_sFactionKey, "#PS-VoNRoom_Faction");
-				m_PlayableControllerComponent.ChangeFactionKey(m_iPlayerId, "");
-				m_PlayableControllerComponent.SetPlayerState(m_iPlayerId, PS_EPlayableControllerState.NotReady);
-				m_PlayableControllerComponent.SetPlayerPlayable(m_iPlayerId, -1);
-				if (PS_PlayersHelper.IsAdminOrServer())
-					m_PlayableControllerComponent.UnpinPlayer(m_iPlayerId);
+				m_PlayableControllerComponent.LeaveSlot(m_iPlayerId);
 				break;
 			case PS_ECharacterState.Empty:
 				SCR_UISoundEntity.SoundEvent("SOUND_FE_BUTTON_FILTER_ON");
@@ -619,9 +601,7 @@ class PS_CharacterSelector : SCR_ButtonComponent
 				break;
 			case PS_ECharacterState.Disconnected:
 				SCR_UISoundEntity.SoundEvent("SOUND_LOBBY_KICK");
-				m_PlayableControllerComponent.MoveToVoNRoom(m_iPlayerId, m_PlayableManager.GetPlayerFactionKey(m_iPlayerId), "#PS-VoNRoom_Faction");
-				m_PlayableControllerComponent.ChangeFactionKey(m_iPlayerId, "");
-				m_PlayableControllerComponent.SetPlayerPlayable(m_iPlayerId, RplId.Invalid());
+				m_PlayableControllerComponent.LeaveSlot(m_iPlayerId);
 				break;
 		}
 	}

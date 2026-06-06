@@ -272,11 +272,6 @@ class PS_PlayableComponent : ScriptComponent
 		if (GetGame().GetAIWorld().CanAIBeActivated())
 			GetGame().GetCallqueue().CallLater(ForceDeactivateAI, 500, true);
 
-		if (PS_GameModeCoop.Cast(GetGame().GetGameMode()).GetDisablePlayablesStreaming())
-		{
-			RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-			rpl.EnableStreaming(false);
-		}
 
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
 		if (!playableManager)

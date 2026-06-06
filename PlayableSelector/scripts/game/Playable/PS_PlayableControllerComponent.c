@@ -1008,6 +1008,108 @@ class PS_PlayableControllerComponent : ScriptComponent
 		playerManager.KickPlayer(playerId, PlayerManagerKickReason.KICK, 0);
 	}
 
+	// -------------------- Atomic slot operations ---------------------
+	protected float m_fLastSlotActionTime = 0;
+	protected static const float SLOT_ACTION_COOLDOWN_MS = 200;
+
+	protected bool SlotThrottlePass()
+	{
+		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		PlayerManager playerManager = GetGame().GetPlayerManager();
+		if (SCR_Global.IsAdmin(thisPlayerController.GetPlayerId()))
+			return true;
+
+		float now = GetGame().GetWorld().GetWorldTime();
+		if (now - m_fLastSlotActionTime < SLOT_ACTION_COOLDOWN_MS)
+			return false;
+		m_fLastSlotActionTime = now;
+		return true;
+	}
+
+	void TakeSlot(int playerId, RplId playableId)
+	{
+		Rpc(RPC_TakeSlot, playerId, playableId);
+	}
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RPC_TakeSlot(int playerId, RplId playableId)
+	{
+		if (!SlotThrottlePass())
+			return;
+
+		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		PlayerManager playerManager = GetGame().GetPlayerManager();
+		EPlayerRole playerRole = playerManager.GetPlayerRoles(thisPlayerController.GetPlayerId());
+		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
+		PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
+		PS_VoNRoomsManager vonRoomsManager = PS_VoNRoomsManager.GetInstance();
+
+		if (thisPlayerController.GetPlayerId() != playerId && playerRole == EPlayerRole.NONE)
+			return;
+		if (playableManager.GetPlayerPin(playerId) && playerRole == EPlayerRole.NONE)
+			return;
+
+		PS_PlayableContainer playableContainer = playableManager.GetPlayableById(playableId);
+		if (!playableContainer)
+			return;
+
+		SCR_ChimeraCharacter playableCharacter = SCR_ChimeraCharacter.Cast(playableContainer.GetPlayableComponent().GetOwner());
+		if (playableCharacter.GetDamageManager().IsDestroyed())
+			return;
+
+		int currentOccupant = playableManager.GetPlayerByPlayable(playableId);
+		if (currentOccupant > 0 && currentOccupant != playerId)
+			return;
+
+		FactionKey factionKey = playableContainer.GetFactionKey();
+		if (!SCR_Global.IsAdmin(thisPlayerController.GetPlayerId()) && !gameModeCoop.CanJoinFaction(factionKey, playableManager.GetPlayerFactionKey(playerId)))
+			return;
+
+		int groupCallsign = playableManager.GetGroupCallsignByPlayable(playableId);
+		string vonRoomName = groupCallsign.ToString();
+
+		playableManager.SetPlayerFactionKey(playerId, factionKey);
+		playableManager.SetPlayerState(playerId, PS_EPlayableControllerState.NotReady);
+		playableManager.SetPlayerPlayable(playerId, playableId);
+		vonRoomsManager.MoveToRoom(playerId, factionKey, vonRoomName);
+
+		if (playerId != thisPlayerController.GetPlayerId())
+			playableManager.SetPlayerPin(playerId, true);
+	}
+
+	void LeaveSlot(int playerId)
+	{
+		Rpc(RPC_LeaveSlot, playerId);
+	}
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RPC_LeaveSlot(int playerId)
+	{
+		if (!SlotThrottlePass())
+			return;
+
+		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		PlayerManager playerManager = GetGame().GetPlayerManager();
+		EPlayerRole playerRole = playerManager.GetPlayerRoles(thisPlayerController.GetPlayerId());
+		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
+		PS_VoNRoomsManager vonRoomsManager = PS_VoNRoomsManager.GetInstance();
+
+		if (thisPlayerController.GetPlayerId() != playerId && playerRole == EPlayerRole.NONE)
+			return;
+		if (playableManager.GetPlayerPin(playerId) && playerRole == EPlayerRole.NONE)
+			return;
+
+		if (playerId != thisPlayerController.GetPlayerId())
+			playableManager.NotifyKick(playerId);
+
+		FactionKey currentFaction = playableManager.GetPlayerFactionKey(playerId);
+		playableManager.SetPlayerFactionKey(playerId, "");
+		playableManager.SetPlayerState(playerId, PS_EPlayableControllerState.NotReady);
+		playableManager.SetPlayerPlayable(playerId, RplId.Invalid());
+		vonRoomsManager.MoveToRoom(playerId, currentFaction, "#PS-VoNRoom_Faction");
+
+		if (playerRole != EPlayerRole.NONE)
+			playableManager.SetPlayerPin(playerId, false);
+	}
+
 	// -------------------- Set ---------------------
 	void SetPlayerState(int playerId, PS_EPlayableControllerState state)
 	{
