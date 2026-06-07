@@ -9,10 +9,16 @@ class PS_PlayableControllerComponent : ScriptComponent
 {
 	protected IEntity m_Camera;
 	protected IEntity m_InitialEntity;
+	protected vector m_vVoNPosition = PS_VoNRoomsManager.roomInitialPosition;
 	protected SCR_EGameModeState m_eMenuState = SCR_EGameModeState.PREGAME;
 	protected bool m_bAfterInitialSwitch = false;
 	protected vector m_vObserverPosition = "0 0 0";
 	protected vector lastCameraTransform[4];
+
+	void SetVoNPosition(vector VoNPosition)
+	{
+		m_vVoNPosition = VoNPosition;
+	}
 	
 	[RplProp()]
 	bool m_bOutFreezeTime;
@@ -65,19 +71,6 @@ class PS_PlayableControllerComponent : ScriptComponent
 	void RPC_SwitchToMenuServer(SCR_EGameModeState state)
 	{
 		SwitchToMenu(state);
-	}
-
-	// Notify this player they were kicked from their slot (Owner-targeted, not broadcast)
-	void NotifyKickOwner()
-	{
-		Rpc(RPC_NotifyKickOwner);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
-	void RPC_NotifyKickOwner()
-	{
-		SCR_ChatPanelManager chatPanelManager = SCR_ChatPanelManager.GetInstance();
-		ChatCommandInvoker invoker = chatPanelManager.GetCommandInvoker("lmsg");
-		invoker.Invoke(null, "#PS-Lobby_RoleKick");
 	}
 
 	void SwitchToMenu(SCR_EGameModeState state)
@@ -189,13 +182,9 @@ class PS_PlayableControllerComponent : ScriptComponent
 	// ------ SpawnPrefab ------
 	void SpawnPrefab(string GUID, vector position)
 	{
+		IEntity camera = GetGame().GetCameraManager().CurrentCamera();
 		if (position == "0 0 0")
-		{
-			IEntity camera = GetGame().GetCameraManager().CurrentCamera();
-			if (!camera)
-				return;
 			position = camera.GetOrigin();
-		}
 		Rpc(RPC_SpawnPrefab, position, GUID);
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
@@ -389,10 +378,18 @@ class PS_PlayableControllerComponent : ScriptComponent
 		ForceSwitch(playerId);
 	}
 
+	// Just don't look at it.
 	override protected void OnPostInit(IEntity owner)
-	{
-		SetEventMask(GetOwner(), EntityEvent.FRAME);
+	{  
+		/*
+		EntitySpawnParams params = new EntitySpawnParams(); 
+		Resource resource = Resource.Load("{6EAA30EF620F4A2E}Prefabs/Editor/Camera/ManualCameraSpectator.et");
+		m_Camera = GetGame().SpawnEntityPrefab(resource, GetGame().GetWorld(), params);
+		*/
+		
+		//SetEventMask(GetOwner(), EntityEvent.POSTFIXEDFRAME);
 		GetGame().GetCallqueue().CallLater(UpdatePosition, 0, true, false);
+		SetEventMask(GetOwner(), EntityEvent.FRAME);
 		SCR_PlayerController playerController = SCR_PlayerController.Cast(PlayerController.Cast(GetOwner()));
 		playerController.m_OnControlledEntityChanged.Insert(OnControlledEntityChanged);
 
@@ -407,6 +404,14 @@ class PS_PlayableControllerComponent : ScriptComponent
 		onPlayerRoleChanged.Insert(OnPlayerRoleChange);
 	}
 
+	override void OnDelete(IEntity owner)
+	{
+		// Stop the repeating per-frame UpdatePosition task (scheduled in OnPostInit) so it cannot
+		// fire on a half-destroyed owner during teardown. The call queue does not auto-remove it.
+		GetGame().GetCallqueue().Remove(UpdatePosition);
+		super.OnDelete(owner);
+	}
+
 	void OnPlayerRoleChange(int playerId, EPlayerRole roleFlags)
 	{
 		m_eOnPlayerRoleChange.Invoke(playerId, roleFlags);
@@ -416,19 +421,18 @@ class PS_PlayableControllerComponent : ScriptComponent
 	private void OnControlledEntityChanged(IEntity from, IEntity to)
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-
+		
 		// Write entity change to replay
 		if (Replication.IsServer()) {
 			RplId toRplId = RplId.Invalid();
 			if (to) {
 				RplComponent rplTo = RplComponent.Cast(to.FindComponent(RplComponent));
-				if (rplTo)
-					toRplId = rplTo.Id();
+				toRplId = rplTo.Id();
 			}
 		}
 
 		RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-		if (!rpl || !rpl.IsOwner())
+		if (!rpl.IsOwner())
 			return;
 		if (!from && !m_bAfterInitialSwitch)
 			return;
@@ -438,7 +442,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 			m_vObserverPosition = from.GetOrigin();
 		}
 		m_bAfterInitialSwitch = true;
-
+		
 		PS_LobbyVoNComponent vonFrom;
 		if (from)
 			vonFrom = PS_LobbyVoNComponent.Cast(from.FindComponent(PS_LobbyVoNComponent));
@@ -448,7 +452,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 		if (!vonTo)
 		{
 			PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
-			if (gameModeCoop && gameModeCoop.GetState() == SCR_EGameModeState.GAME)
+			if (gameModeCoop.GetState() == SCR_EGameModeState.GAME)
 				GetGame().GetCallqueue().Call(TellFuckingEditorCoreThanWeAlive, thisPlayerController.GetPlayerId(), to);
 		}
 		if (vonTo && !vonFrom)
@@ -593,88 +597,88 @@ class PS_PlayableControllerComponent : ScriptComponent
 		actionManager.SetActionValue("CarHazardLights", 0);
 	}
 
-
-	protected bool m_bInitialPositionSet = false;
-
+	override void EOnFixedFrame(IEntity owner, float timeSlice)
+	{
+		UpdatePosition(false);
+	}
+	
 	void UpdatePosition(bool force)
 	{
-		if (!GetOwner())
-		{
-			GetGame().GetCallqueue().Remove(UpdatePosition);
-			return;
-		}
-
 		RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-		if (!rpl || !rpl.IsOwner())
+		if (!rpl.IsOwner())
 			return;
 
+		// This runs every frame from a repeating call-queue task. During teardown / controlled-entity
+		// switches the owner may transiently not resolve as a PlayerController — skip such frames safely.
+		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
+		if (!thisPlayerController)
+			return;
+
+		// Lets fight with phisyc engine
 		if (m_InitialEntity)
 		{
-			PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-			if (!thisPlayerController)
-			{
-				GetGame().GetCallqueue().Remove(UpdatePosition);
-				return;
-			}
 			int playerId = thisPlayerController.GetPlayerId();
-			vector targetPos = Vector(5000, 100000, 5000) + Vector(1000 * Math.Mod(playerId, 10), 5000 * Math.Floor(Math.Mod(playerId, 100) / 10), 5000 * Math.Floor(playerId / 100));
-
-			Physics physics = m_InitialEntity.GetPhysics();
-			if (physics && physics.IsActive())
-			{
-				physics.SetActive(ActiveState.INACTIVE);
-			}
-
+			// Park the lobby/VoN limbo entity (and lobby camera) high but strictly INSIDE world bounds,
+			// spread per player. The old Y=100000 was outside world bounds and tripped the engine
+			// assertion (enf_entity.cpp:280 "Entity out of world bounds") on the Diag build.
+			vector wMin, wMax;
+			GetGame().GetWorld().GetBoundBox(wMin, wMax);
+			float margin = 100;
+			float spacing = 20;
+			float px = wMin[0] + margin + Math.Mod(playerId, 10) * spacing;
+			float pz = wMin[2] + margin + Math.Floor(playerId / 10) * spacing;
+			px = Math.Clamp(px, wMin[0] + margin, wMax[0] - margin);
+			pz = Math.Clamp(pz, wMin[2] + margin, wMax[2] - margin);
+			float py = wMax[1] - margin; // high in the sky, still inside world bounds
+			m_vVoNPosition = Vector(px, py, pz);
 			vector currentOrigin = m_InitialEntity.GetOrigin();
-			float distSq = vector.DistanceSq(currentOrigin, targetPos);
-
-			if (distSq > 1.0 || force)
-			{
-				GameEntity gameEntity = GameEntity.Cast(m_InitialEntity);
-				vector mat[4];
-				Math3D.MatrixIdentity4(mat);
-				mat[3] = targetPos;
-				if (force)
-					gameEntity.Teleport(mat);
-				gameEntity.SetTransform(mat);
-			}
-
+			//if (currentOrigin == m_vVoNPosition) return;
+			//Print("Move to: " + m_vVoNPosition.ToString());
+			
+			GameEntity gameEntity = GameEntity.Cast(m_InitialEntity);
+			vector mat[4];
+			Math3D.MatrixIdentity4(mat);
+			mat[3] = m_vVoNPosition;
+			if (force)
+				gameEntity.Teleport(mat);
+			gameEntity.SetTransform(mat);
+			
 			MenuBase menu = GetGame().GetMenuManager().GetTopMenu();
 			if (menu && (menu.IsInherited(PS_PreviewMapMenu) || menu.IsInherited(PS_CoopLobby) || menu.IsInherited(PS_BriefingMapMenu)))
 			{
-				vector camMat[4];
-				Math3D.MatrixIdentity4(camMat);
-				camMat[3] = targetPos;
-				GetGame().GetCameraManager().CurrentCamera().SetWorldTransform(camMat);
+				GetGame().GetCameraManager().CurrentCamera().SetWorldTransform(mat);
 				if (m_Camera)
-					m_Camera.SetTransform(camMat);
-
-				CameraBase cameraBase = GetGame().GetCameraManager().CurrentCamera();
-				if (cameraBase)
-					cameraBase.ApplyTransform(GetGame().GetWorld().GetTimeSlice());
+					m_Camera.SetTransform(mat);	
 			}
 
-			if (!m_bInitialPositionSet && distSq <= 1.0)
+			// Who broke camera on map?
+			CameraBase cameraBase = GetGame().GetCameraManager().CurrentCamera();
+			if (cameraBase)
+				cameraBase.ApplyTransform(GetGame().GetWorld().GetTimeSlice());
+ 
+
+			Physics physics = m_InitialEntity.GetPhysics();
+			if (physics)
 			{
-				m_bInitialPositionSet = true;
-				GetGame().GetCallqueue().Remove(UpdatePosition);
-				GetGame().GetCallqueue().CallLater(UpdatePosition, 1000, true, false);
+				//physics.SetVelocity("0 0 0");
+				//physics.SetAngularVelocity("0 0 0");
+				//physics.SetMass(0);
+				//physics.SetDamping(1, 1);
+				//physics.ChangeSimulationState(SimulationState.NONE);
+				physics.SetActive(ActiveState.INACTIVE);
 			}
 		} else {
-			PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
 			IEntity entity = thisPlayerController.GetControlledEntity();
 			if (entity)
 			{
 				PS_LobbyVoNComponent von = PS_LobbyVoNComponent.Cast(entity.FindComponent(PS_LobbyVoNComponent));
 				if (von)
-				{
 					m_InitialEntity = entity;
-					m_bInitialPositionSet = false;
-				}
 			}
 		}
 	}
 
+	// Save VoN boi for reuse
 	IEntity GetInitialEntity()
 	{
 		return m_InitialEntity;
@@ -686,6 +690,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 
 	void ChangeFactionKey(int playerId, FactionKey factionKey)
 	{
+		Print("[PS C->S] ChangeFactionKey playerId=" + playerId + " faction=" + factionKey, LogLevel.NORMAL);
 		Rpc(RPC_ChangeFactionKey, playerId, factionKey)
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
@@ -728,6 +733,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 	}
 	void MoveToVoNRoom(int playerId, FactionKey factionKey, string roomName)
 	{
+		Print("[PS C->S] MoveToVoNRoom playerId=" + playerId + " faction=" + factionKey + " room=" + roomName, LogLevel.NORMAL);
 		Rpc(RPC_MoveVoNToRoom, playerId, factionKey, roomName);
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
@@ -742,49 +748,38 @@ class PS_PlayableControllerComponent : ScriptComponent
 	PS_LobbyVoNComponent GetVoN()
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		if (!thisPlayerController)
-			return null;
 		IEntity entity = thisPlayerController.GetControlledEntity();
-		if (!entity)
-			return null;
 		PS_LobbyVoNComponent von = PS_LobbyVoNComponent.Cast(entity.FindComponent(PS_LobbyVoNComponent));
 		return von;
 	}
-	RadioTransceiver GetVoNTransiver()
+	RadioTransceiver GetVoNTransiver(int radioId)
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		if (!thisPlayerController)
-			return null;
 		IEntity entity = thisPlayerController.GetControlledEntity();
-		if (!entity)
-			return null;
 		SCR_GadgetManagerComponent gadgetManager = SCR_GadgetManagerComponent.Cast(entity.FindComponent(SCR_GadgetManagerComponent));
-		if (!gadgetManager)
-			return null;
 		array<SCR_GadgetComponent> radios = gadgetManager.GetGadgetsByType(EGadgetType.RADIO);
-		if (!radios || radios.Count() < 2)
-			return null;
-		IEntity radioEntity = radios[1].GetOwner();
+		IEntity radioEntity = radios[radioId].GetOwner();
 		BaseRadioComponent radio = BaseRadioComponent.Cast(radioEntity.FindComponent(BaseRadioComponent));
-		if (!radio)
-			return null;
 		radio.SetPower(true);
 		RadioTransceiver transiver = RadioTransceiver.Cast(radio.GetTransceiver(0));
-		if (!transiver)
-			return null;
-		transiver.SetFrequency(2);
+		transiver.SetFrequency(radioId + 1);
 		return transiver;
 	}
 	void LobbyVoNEnable()
 	{
+		UpdatePosition(true);
 		GetGame().GetCallqueue().Remove(LobbyVoNDisableDelayed);
 		PS_LobbyVoNComponent von = GetVoN();
-		if (!von)
-			return;
-		RadioTransceiver transiver = GetVoNTransiver();
-		if (!transiver)
-			return;
-		von.SetTransmitRadio(transiver);
+		von.SetTransmitRadio(GetVoNTransiver(1));
+		von.SetCommMethod(ECommMethod.SQUAD_RADIO);
+		von.SetCapture(true);
+	}
+	void LobbyVoNRadioEnable()
+	{
+		UpdatePosition(true);
+		GetGame().GetCallqueue().Remove(LobbyVoNDisableDelayed);
+		PS_LobbyVoNComponent von = GetVoN();
+		von.SetTransmitRadio(GetVoNTransiver(0));
 		von.SetCommMethod(ECommMethod.SQUAD_RADIO);
 		von.SetCapture(true);
 	}
@@ -811,31 +806,22 @@ class PS_PlayableControllerComponent : ScriptComponent
 		if (!entity)
 			return;
 		SCR_GadgetManagerComponent gadgetManager = SCR_GadgetManagerComponent.Cast(entity.FindComponent(SCR_GadgetManagerComponent));
-		if (!gadgetManager)
-			return;
 		array<SCR_GadgetComponent> radios = gadgetManager.GetGadgetsByType(EGadgetType.RADIO);
-		if (!radios || radios.Count() < 2)
-			return;
-		BaseRadioComponent radio = BaseRadioComponent.Cast(radios[0].GetOwner().FindComponent(BaseRadioComponent));
-		if (radio)
+		if (radios.Count() > 0)
+		{
+			BaseRadioComponent radio = BaseRadioComponent.Cast(radios[0].GetOwner().FindComponent(BaseRadioComponent));
 			radio.SetEncryptionKey(VoNKey);
-		radio = BaseRadioComponent.Cast(radios[1].GetOwner().FindComponent(BaseRadioComponent));
-		if (radio)
+			radio = BaseRadioComponent.Cast(radios[1].GetOwner().FindComponent(BaseRadioComponent));
 			radio.SetEncryptionKey(VoNKeyLocal);
+		}
 	}
 	bool isVonInit()
 	{
 		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		if (!thisPlayerController)
-			return false;
 		IEntity entity = thisPlayerController.GetControlledEntity();
-		if (!entity)
-			return false;
 		SCR_GadgetManagerComponent gadgetManager = SCR_GadgetManagerComponent.Cast(entity.FindComponent(SCR_GadgetManagerComponent));
-		if (!gadgetManager)
-			return false;
 		IEntity radioEntity = gadgetManager.GetGadgetByType(EGadgetType.RADIO);
-		return radioEntity != null;
+		return radioEntity;
 	}
 	
 	void GetArmaIdFromServer(int playerId)
@@ -875,8 +861,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 		EntitySpawnParams params = new EntitySpawnParams();
 		if (from)
 			from.GetTransform(params.Transform);
-		// Defer VoN room change to spread RPC load during death transition
-		GetGame().GetCallqueue().CallLater(MoveToVoNRoom, 400, false, thisPlayerController.GetPlayerId(), "", "");
+		MoveToVoNRoom(thisPlayerController.GetPlayerId(), "", "");
 		Resource resource = Resource.Load("{6EAA30EF620F4A2E}Prefabs/Editor/Camera/ManualCameraSpectator.et");
 		m_Camera = GetGame().SpawnEntityPrefab(resource, GetGame().GetWorld(), params);
 
@@ -1008,90 +993,10 @@ class PS_PlayableControllerComponent : ScriptComponent
 		playerManager.KickPlayer(playerId, PlayerManagerKickReason.KICK, 0);
 	}
 
-	// -------------------- Atomic slot operations ---------------------
-	void TakeSlot(int playerId, RplId playableId)
-	{
-		Rpc(RPC_TakeSlot, playerId, playableId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RPC_TakeSlot(int playerId, RplId playableId)
-	{
-		PS_LobbyMetrics.OnTakeSlot(playerId, playableId);
-		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		PlayerManager playerManager = GetGame().GetPlayerManager();
-		EPlayerRole playerRole = playerManager.GetPlayerRoles(thisPlayerController.GetPlayerId());
-		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
-		PS_GameModeCoop gameModeCoop = PS_GameModeCoop.Cast(GetGame().GetGameMode());
-		PS_VoNRoomsManager vonRoomsManager = PS_VoNRoomsManager.GetInstance();
-
-		if (thisPlayerController.GetPlayerId() != playerId && playerRole == EPlayerRole.NONE)
-			return;
-		if (playableManager.GetPlayerPin(playerId) && playerRole == EPlayerRole.NONE)
-			return;
-
-		PS_PlayableContainer playableContainer = playableManager.GetPlayableById(playableId);
-		if (!playableContainer)
-			return;
-
-		SCR_ChimeraCharacter playableCharacter = SCR_ChimeraCharacter.Cast(playableContainer.GetPlayableComponent().GetOwner());
-		if (playableCharacter.GetDamageManager().IsDestroyed())
-			return;
-
-		int currentOccupant = playableManager.GetPlayerByPlayable(playableId);
-		if (currentOccupant > 0 && currentOccupant != playerId)
-			return;
-
-		FactionKey factionKey = playableContainer.GetFactionKey();
-		if (!SCR_Global.IsAdmin(thisPlayerController.GetPlayerId()) && !gameModeCoop.CanJoinFaction(factionKey, playableManager.GetPlayerFactionKey(playerId)))
-			return;
-
-		int groupCallsign = playableManager.GetGroupCallsignByPlayable(playableId);
-		string vonRoomName = groupCallsign.ToString();
-
-		playableManager.SetPlayerFactionKey(playerId, factionKey);
-		playableManager.SetPlayerState(playerId, PS_EPlayableControllerState.NotReady);
-		playableManager.SetPlayerPlayable(playerId, playableId);
-		vonRoomsManager.MoveToRoom(playerId, factionKey, vonRoomName);
-
-		if (playerId != thisPlayerController.GetPlayerId())
-			playableManager.SetPlayerPin(playerId, true);
-	}
-
-	void LeaveSlot(int playerId)
-	{
-		Rpc(RPC_LeaveSlot, playerId);
-	}
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RPC_LeaveSlot(int playerId)
-	{
-		PS_LobbyMetrics.OnLeaveSlot(playerId);
-		PlayerController thisPlayerController = PlayerController.Cast(GetOwner());
-		PlayerManager playerManager = GetGame().GetPlayerManager();
-		EPlayerRole playerRole = playerManager.GetPlayerRoles(thisPlayerController.GetPlayerId());
-		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
-		PS_VoNRoomsManager vonRoomsManager = PS_VoNRoomsManager.GetInstance();
-
-		if (thisPlayerController.GetPlayerId() != playerId && playerRole == EPlayerRole.NONE)
-			return;
-		if (playableManager.GetPlayerPin(playerId) && playerRole == EPlayerRole.NONE)
-			return;
-
-		if (playerId != thisPlayerController.GetPlayerId())
-			playableManager.NotifyKick(playerId);
-
-		FactionKey currentFaction = playableManager.GetPlayerFactionKey(playerId);
-		playableManager.SetPlayerFactionKey(playerId, "");
-		playableManager.SetPlayerState(playerId, PS_EPlayableControllerState.NotReady);
-		playableManager.SetPlayerPlayable(playerId, RplId.Invalid());
-		vonRoomsManager.MoveToRoom(playerId, currentFaction, "#PS-VoNRoom_Faction");
-
-		if (playerRole != EPlayerRole.NONE)
-			playableManager.SetPlayerPin(playerId, false);
-	}
-
 	// -------------------- Set ---------------------
 	void SetPlayerState(int playerId, PS_EPlayableControllerState state)
 	{
+		Print("[PS C->S] SetPlayerState playerId=" + playerId + " state=" + state, LogLevel.NORMAL);
 		Rpc(RPC_SetPlayerState, playerId, state)
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
@@ -1156,6 +1061,7 @@ class PS_PlayableControllerComponent : ScriptComponent
 	
 	void SetPlayerPlayable(int playerId, RplId playableId)
 	{
+		Print("[PS C->S] SetPlayerPlayable playerId=" + playerId + " playableId=" + playableId, LogLevel.NORMAL);
 		Rpc(RPC_SetPlayerPlayable, playerId, playableId);
 	}
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]

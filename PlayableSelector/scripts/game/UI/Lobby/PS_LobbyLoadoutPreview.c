@@ -270,9 +270,7 @@ class PS_LobbyLoadoutPreview : SCR_WLibComponentBase
 		// LODs for some reason start rave party if you to far from character. 
 		// Yes it's performance issue but then why it switch between LODs? :<
 		previewManager.SetPreviewItemFromPrefab(m_Preview.GetItemPreviewWidget(), m_sPrefabName);
-		PS_PlayableContainer playableContainer = playableManager.GetPlayableById(m_iPlayableId);
-		if (playableContainer)
-			m_wLoadoutText.SetText(playableContainer.GetName());
+		m_wLoadoutText.SetText(playableManager.GetPlayableName(m_iPlayableId));
 		
 		// Faction data
 		m_wLoadoutBackgroundImage.SetColor(faction.GetOutlineFactionColor());

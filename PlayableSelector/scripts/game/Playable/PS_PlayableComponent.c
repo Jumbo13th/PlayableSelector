@@ -174,7 +174,8 @@ class PS_PlayableComponent : ScriptComponent
 	void ResetRplStream()
 	{
 		RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-		rpl.EnableStreaming(true);
+		if (rpl)
+			rpl.EnableStreaming(true);
 	}
 
 	private void RemoveFromList()
@@ -213,33 +214,14 @@ class PS_PlayableComponent : ScriptComponent
 	{
 		if (!m_PlayableManager)
 			return;
-
-		// Check if character is actually dead (destroyed or damage manager reports it)
-		bool isDead = (state == EDamageState.DESTROYED);
-		if (!isDead && m_CharacterDamageManagerComponent)
-			isDead = m_CharacterDamageManagerComponent.IsDestroyed();
-
-		if (!m_bRespawned && isDead)
+		if (!m_bRespawned && state == EDamageState.DESTROYED)
 		{
 			GetGame().GetCallqueue().CallLater(TryRespawn, 200, false, m_PlayableManager.GetPlayerByPlayable(m_RplId));
 			m_bRespawned = true;
-
-			// Re-enable streaming on dead characters — they no longer need to be
-			// in scope for all clients. Prevents Disabled count from growing with
-			// each death, which causes FLOODED kicks for spectators.
-			RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
-			if (rpl)
-				rpl.EnableStreaming(true);
-
-			// Stop the AI deactivation loop — no longer needed for dead characters
-			GetGame().GetCallqueue().Remove(ForceDeactivateAI);
+			ResetRplStream();                                   // return streaming to the corpse (re-enable relevancy culling)
+			GetGame().GetCallqueue().Remove(ForceDeactivateAI); // stop the AI deactivation loop on the corpse
 		}
-
-		// Only broadcast significant state changes (death/destruction) to all clients.
-		// Intermediate damage states (wounded, unconscious) are too frequent during
-		// combat and don't need network-wide propagation.
-		if (isDead)
-			m_PlayableManager.OnPlayableDamageStateChanged(m_RplId, state);
+		m_PlayableManager.OnPlayableDamageStateChanged(m_RplId, state);
 	}
 
 	private void TryRespawn(int playerId)
@@ -272,6 +254,11 @@ class PS_PlayableComponent : ScriptComponent
 		if (GetGame().GetAIWorld().CanAIBeActivated())
 			GetGame().GetCallqueue().CallLater(ForceDeactivateAI, 500, true);
 
+		if (PS_GameModeCoop.Cast(GetGame().GetGameMode()).GetDisablePlayablesStreaming())
+		{
+			RplComponent rpl = RplComponent.Cast(GetOwner().FindComponent(RplComponent));
+			rpl.EnableStreaming(false);
+		}
 
 		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
 		if (!playableManager)
@@ -301,8 +288,6 @@ class PS_PlayableComponent : ScriptComponent
 		}
 		if (m_AIAgent.IsAIActivated())
 			m_AIAgent.DeactivateAI();
-		else
-			GetGame().GetCallqueue().Remove(ForceDeactivateAI);
 	}
 
 	void HolsterWeapon()

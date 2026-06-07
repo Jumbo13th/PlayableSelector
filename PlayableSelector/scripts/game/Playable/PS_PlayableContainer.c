@@ -5,9 +5,12 @@ class PS_PlayableContainer
 	protected string m_sName;
 	protected FactionKey m_FactionKey;
 	protected SCR_ECharacterRank m_eCharacterRank;
+	// R3: role icon/name are NOT serialized (they were duplicated across 100+ slots). Cached here,
+	// resolved lazily: from the live component on the server, from the prefab on the client.
 	protected string m_sRoleIconPath;
 	protected string m_sRoleIconQuad;
 	protected string m_sRoleName;
+	protected bool m_bRoleResolved;
 	protected EDamageState m_eDamageState;
 
 	void Init(PS_PlayableComponent playableComponent) // Rpc workaround
@@ -20,6 +23,7 @@ class PS_PlayableContainer
 		m_sRoleIconPath = playableComponent.GetRoleIconPath();
 		m_sRoleIconQuad = playableComponent.GetRoleIconQuad();
 		m_sRoleName = playableComponent.GetRoleName();
+		m_bRoleResolved = true; // server has authoritative role meta from the component
 		m_eDamageState = playableComponent.GetDamageState();
 	}
 
@@ -30,9 +34,6 @@ class PS_PlayableContainer
 		snapshot.SerializeString(instance.m_sName);
 		snapshot.SerializeString(instance.m_FactionKey);
 		snapshot.SerializeInt(instance.m_eCharacterRank);
-		snapshot.SerializeString(instance.m_sRoleIconPath);
-		snapshot.SerializeString(instance.m_sRoleIconQuad);
-		snapshot.SerializeString(instance.m_sRoleName);
 		snapshot.SerializeInt(instance.m_eDamageState);
 		return true;
 	}
@@ -43,9 +44,6 @@ class PS_PlayableContainer
 		snapshot.SerializeString(instance.m_sName);
 		snapshot.SerializeString(instance.m_FactionKey);
 		snapshot.SerializeInt(instance.m_eCharacterRank);
-		snapshot.SerializeString(instance.m_sRoleIconPath);
-		snapshot.SerializeString(instance.m_sRoleIconQuad);
-		snapshot.SerializeString(instance.m_sRoleName);
 		snapshot.SerializeInt(instance.m_eDamageState);
 		return true;
 	}
@@ -56,9 +54,6 @@ class PS_PlayableContainer
 		snapshot.EncodeString(packet);
 		snapshot.EncodeString(packet);
 		snapshot.EncodeInt(packet);
-		snapshot.EncodeString(packet);
-		snapshot.EncodeString(packet);
-		snapshot.EncodeString(packet);
 		snapshot.EncodeInt(packet);
 	}
 
@@ -68,40 +63,26 @@ class PS_PlayableContainer
 		snapshot.DecodeString(packet);
 		snapshot.DecodeString(packet);
 		snapshot.DecodeInt(packet);
-		snapshot.DecodeString(packet);
-		snapshot.DecodeString(packet);
-		snapshot.DecodeString(packet);
 		snapshot.DecodeInt(packet);
 		return true;
 	}
 
 	static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
 	{
-		bool same = true;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		return same;
+		return lhs.CompareSnapshots(rhs, 4)
+			&& lhs.CompareStringSnapshots(rhs)
+			&& lhs.CompareStringSnapshots(rhs)
+			&& lhs.CompareSnapshots(rhs, 4)
+			&& lhs.CompareSnapshots(rhs, 4);
 	}
 
 	static bool PropCompare(PS_PlayableContainer instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
 	{
-		// Must consume ALL bytes even when a difference is found.
-		bool same = true;
-		if (!snapshot.CompareInt(instance.m_RplId)) same = false;
-		if (!snapshot.CompareString(instance.m_sName)) same = false;
-		if (!snapshot.CompareString(instance.m_FactionKey)) same = false;
-		if (!snapshot.CompareInt(instance.m_eCharacterRank)) same = false;
-		if (!snapshot.CompareString(instance.m_sRoleIconPath)) same = false;
-		if (!snapshot.CompareString(instance.m_sRoleIconQuad)) same = false;
-		if (!snapshot.CompareString(instance.m_sRoleName)) same = false;
-		if (!snapshot.CompareInt(instance.m_eDamageState)) same = false;
-		return same;
+		return snapshot.CompareInt(instance.m_RplId)
+			&& snapshot.CompareString(instance.m_sName)
+			&& snapshot.CompareString(instance.m_FactionKey)
+			&& snapshot.CompareInt(instance.m_eCharacterRank)
+			&& snapshot.CompareInt(instance.m_eDamageState);
 	}
 
 	void Save(ScriptBitWriter writer)
@@ -110,22 +91,17 @@ class PS_PlayableContainer
 		writer.WriteString(m_sName);
 		writer.WriteString(m_FactionKey);
 		writer.WriteInt(m_eCharacterRank);
-		writer.WriteString(m_sRoleIconPath);
-		writer.WriteString(m_sRoleIconQuad);
-		writer.WriteString(m_sRoleName);
 		writer.WriteInt(m_eDamageState);
 	}
 
-	void Load(ScriptBitReader reader)
+	bool Load(ScriptBitReader reader)
 	{
-		reader.ReadInt(m_RplId);
-		reader.ReadString(m_sName);
-		reader.ReadString(m_FactionKey);
-		reader.ReadInt(m_eCharacterRank);
-		reader.ReadString(m_sRoleIconPath);
-		reader.ReadString(m_sRoleIconQuad);
-		reader.ReadString(m_sRoleName);
-		reader.ReadInt(m_eDamageState);
+		if (!reader.ReadInt(m_RplId)) return false;
+		if (!reader.ReadString(m_sName)) return false;
+		if (!reader.ReadString(m_FactionKey)) return false;
+		if (!reader.ReadInt(m_eCharacterRank)) return false;
+		if (!reader.ReadInt(m_eDamageState)) return false;
+		return true;
 	}
 
 	// -------------------------- Get server ----------------------------
@@ -209,17 +185,72 @@ class PS_PlayableContainer
 	{
 		return SCR_Faction.Cast(GetGame().GetFactionManager().GetFactionByKey(GetFactionKey()));
 	}
+	// R3: lazily resolve role icon/name (no longer serialized). Role meta is static per prefab/role,
+	// so it is resolved once and cached. Server reads the live component; client derives from the
+	// prefab via the preview manager (independent of entity scope — works for out-of-scope corpses).
+	protected void ResolveRoleMeta()
+	{
+		if (m_bRoleResolved)
+			return;
+
+		// Server / listen-server host: the playable component (server-only) is the authority
+		if (m_PlayableComponent)
+		{
+			m_sRoleIconPath = m_PlayableComponent.GetRoleIconPath();
+			m_sRoleIconQuad = m_PlayableComponent.GetRoleIconQuad();
+			m_sRoleName = m_PlayableComponent.GetRoleName();
+			m_bRoleResolved = true;
+			return;
+		}
+
+		// Pure client: derive from the prefab via the preview manager
+		PS_PlayableManager playableManager = PS_PlayableManager.GetInstance();
+		if (!playableManager)
+			return;
+		ResourceName prefab = playableManager.GetPlayablePrefab(m_RplId);
+		if (prefab == "")
+			return; // prefab not replicated yet — retry on next access
+
+		ChimeraWorld world = ChimeraWorld.CastFrom(GetGame().GetWorld());
+		if (!world)
+			return;
+		ItemPreviewManagerEntity previewManager = world.GetItemPreviewManager();
+		if (!previewManager)
+			return;
+		IEntity entity = previewManager.ResolvePreviewEntityForPrefab(prefab);
+		if (!entity)
+			return;
+		SCR_EditableCharacterComponent editableCharacterComponent = SCR_EditableCharacterComponent.Cast(entity.FindComponent(SCR_EditableCharacterComponent));
+		if (!editableCharacterComponent)
+			return;
+		SCR_UIInfo uiInfo = editableCharacterComponent.GetInfo();
+		if (!uiInfo)
+			return;
+
+		// Mirror PS_PlayableComponent.GetRoleIconPath/Quad/RoleName
+		if (uiInfo.GetIconSetName() == "")
+			m_sRoleIconPath = uiInfo.GetIconPath();
+		else
+			m_sRoleIconPath = uiInfo.GetImageSetPath();
+		m_sRoleIconQuad = uiInfo.GetIconSetName();
+		m_sRoleName = uiInfo.GetName();
+		m_bRoleResolved = true;
+	}
+
 	string GetRoleIconPath()
 	{
+		ResolveRoleMeta();
 		return m_sRoleIconPath;
 	}
 	string GetRoleIconQuad()
 	{
+		ResolveRoleMeta();
 		return m_sRoleIconQuad;
 	}
-	
+
 	bool SetIconTo(ImageWidget imageWidget)
 	{
+		ResolveRoleMeta();
 		if (!imageWidget || m_sRoleIconPath.IsEmpty())
 			return false;
 
@@ -230,9 +261,10 @@ class PS_PlayableContainer
 
 		return true;
 	}
-	
+
 	string GetRoleName()
 	{
+		ResolveRoleMeta();
 		return m_sRoleName;
 	}
 	SCR_ECharacterRank GetCharacterRank()

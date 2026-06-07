@@ -11,13 +11,13 @@ class PS_LobbyVoNComponentClass : SCR_VoNComponentClass
 {}
 
 //------------------------------------------------------------------------------------------------
-class PS_LobbyVoNComponent : VoNComponent
+class PS_LobbyVoNComponent : VoNComponent 
 {
 	const float PS_TRANSMISSION_TIMEOUT_MS = 400;
 	protected float PS_m_fTransmitingTimeout;
 	ref map<int, float> m_fPlayerSpeachReciveTime = new map<int, float>();
 	ref map<int, bool> m_fPlayerSpeachReciveIsChannel = new map<int, bool>();
-
+	
 	ref PS_ScriptInvokerOnReceive m_ScriptInvokerOnReceiveStart = new PS_ScriptInvokerOnReceive();
 	PS_ScriptInvokerOnReceive GetOnReceiveStart()
 	{
@@ -33,6 +33,26 @@ class PS_LobbyVoNComponent : VoNComponent
 	{
 		return m_ScriptInvokerOnCaptured;
 	}
+	
+	void PS_LobbyVoNComponent(IEntityComponentSource src, IEntity ent, IEntity parent)
+	{
+		//GetGame().GetCallqueue().CallLater(DisablePhysicForOwner, 0, false, ent);
+	}
+	
+	void DisablePhysicForOwner(IEntity owner)
+	{
+		Physics physics = owner.GetPhysics();
+		if (physics)
+		{
+			//physics.SetVelocity("0 0 0");
+			//physics.SetAngularVelocity("0 0 0");
+			//physics.SetMass(0);
+			//physics.SetDamping(1, 1);
+			//physics.ChangeSimulationState(SimulationState.NONE);
+			//physics.SetActive(ActiveState.INACTIVE);
+		}
+	}
+	
 	
 	float GetPlayerSpeechTime(int playerId)
 	{

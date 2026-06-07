@@ -52,7 +52,7 @@ class PS_VoiceChatList : SCR_ScriptedWidgetComponent
 		if (m_gVoNRoomsManager)
 			Rebuild();
 		
-		GetGame().GetCallqueue().CallLater(UpdateInfo, 500, true);
+		GetGame().GetCallqueue().CallLater(UpdateInfo, 100, true);
 	}
 	
 	void ~PS_VoiceChatList()

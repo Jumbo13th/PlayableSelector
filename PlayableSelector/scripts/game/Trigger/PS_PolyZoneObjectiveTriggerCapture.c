@@ -21,10 +21,10 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 	ref map<FactionKey, int> m_mFactionCounters = new map<FactionKey, int>();
 	ref map<FactionKey, float> m_mFactionTimers = new map<FactionKey, float>();
 
-	// Throttle timer sync to avoid flooding the network
+	// Throttle for client timer sync (traffic optimization, see docs/ReplicationOpt-Plan-Original.md п.1)
 	protected float m_fTimerSyncAccumulator = 0;
-	protected static const float TIMER_SYNC_INTERVAL = 0.5; // Sync every 0.5 seconds
-
+	protected static const float TIMER_SYNC_INTERVAL = 2.0; // sync once per 2s (favors traffic; HUD counter is "stepped")
+	
 	override void OnInit(IEntity owner)
 	{
 		super.OnInit(owner);
@@ -69,7 +69,7 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 		if (!Replication.IsServer())
 			return;
 
-		// Sync timers to clients at a throttled rate instead of every frame
+		// Throttled batch sync to clients instead of per-frame per-faction reliable RPCs
 		m_fTimerSyncAccumulator += timeSlice;
 		if (m_fTimerSyncAccumulator >= TIMER_SYNC_INTERVAL)
 		{
@@ -123,7 +123,8 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 		}
 	}
 	
-	// Batch-sync all faction timers in a single RPC at a throttled rate
+	// Batch all faction timers into a single Unreliable broadcast (self-healing: next batch
+	// overwrites any lost packet). Replaces per-frame per-faction Reliable RPC flood.
 	void SyncFactionTimers()
 	{
 		array<FactionKey> keys = {};
@@ -134,16 +135,12 @@ class PS_PolyZoneObjectiveTriggerCapture : PS_PolyZoneObjectiveTrigger
 			values.Insert(timer);
 		}
 		Rpc(RPC_SyncFactionTimers, keys, values);
-		if (RplSession.Mode() != RplMode.Dedicated)
-			RPC_SyncFactionTimers(keys, values);
 	}
 	[RplRpc(RplChannel.Unreliable, RplRcver.Broadcast)]
 	void RPC_SyncFactionTimers(array<FactionKey> keys, array<float> values)
 	{
 		for (int i = 0; i < keys.Count(); i++)
-		{
 			m_mFactionTimers[keys[i]] = values[i];
-		}
 	}
 	
 	override bool ScriptedEntityFilterForQuery(IEntity ent)

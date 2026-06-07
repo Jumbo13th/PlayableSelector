@@ -292,7 +292,7 @@ class PS_SpectatorMenu: MenuBase
 			contextMenu.ActionDetachFrom(character).Insert(OnActionDetachFrom);
 		contextMenu.ActionLookAt(character).Insert(OnActionLookAt);
 		contextMenu.ActionFirstPersonView(character).Insert(OnActionFirstPersonView);
-		contextMenu.ActionRespawnInPlace(playableComponent.GetRplId(), playerId);
+		contextMenu.ActionRespawnInPlace(playableComponent.GetId(), playerId);
 		if (playerId > 0)
 		{
 			contextMenu.ActionKick(playerId);
@@ -347,13 +347,6 @@ class PS_SpectatorMenu: MenuBase
 		PlayerController playerController = GetGame().GetPlayerController();
 		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
 		playableController.MoveToVoNRoom(playerController.GetPlayerId(), "", "#PS-VoNRoom_Global");
-		GetGame().GetCallqueue().CallLater(RoomSwitchToGlobalDelayed, 500, false);
-	}
-
-	void RoomSwitchToGlobalDelayed()
-	{
-		if (m_hVoiceChatList)
-			m_hVoiceChatList.SwitchFaction("");
 	}
 	
 	void InitChat()
@@ -401,8 +394,8 @@ class PS_SpectatorMenu: MenuBase
 			m_InputManager.RemoveActionListener("ShowScoreboard", EActionTrigger.DOWN, OnShowPlayerList);
 			m_InputManager.RemoveActionListener("MenuOpen", EActionTrigger.DOWN, OpenPauseMenu);
 			m_InputManager.RemoveActionListener("ChatToggle", EActionTrigger.DOWN, ChatToggle);
-			m_InputManager.RemoveActionListener("VONDirect", EActionTrigger.DOWN, Action_LobbyVoNOn);
-			m_InputManager.RemoveActionListener("VONDirect", EActionTrigger.UP, Action_LobbyVoNOff);
+			m_InputManager.RemoveActionListener("LobbyVoN", EActionTrigger.DOWN, Action_LobbyVoNOn);
+			m_InputManager.RemoveActionListener("LobbyVoN", EActionTrigger.UP, Action_LobbyVoNOff);
 			m_InputManager.RemoveActionListener("SwitchSpectatorUI", EActionTrigger.DOWN, Action_SwitchSpectatorUI);
 			m_InputManager.RemoveActionListener("GadgetMap", EActionTrigger.DOWN, Action_ToggleMap);
 			m_InputManager.RemoveActionListener("ManualCameraTeleport", EActionTrigger.DOWN, Action_ManualCameraTeleport);
@@ -587,7 +580,7 @@ class PS_SpectatorMenu: MenuBase
 	{
 		PlayerController playerController = GetGame().GetPlayerController();
 		PS_PlayableControllerComponent playableController = PS_PlayableControllerComponent.Cast(playerController.FindComponent(PS_PlayableControllerComponent));
-		playableController.LobbyVoNEnable();
+		playableController.LobbyVoNRadioEnable();
 	}
 	
 	void Action_LobbyVoNOff()

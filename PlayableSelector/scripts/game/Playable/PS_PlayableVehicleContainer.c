@@ -73,30 +73,26 @@ class PS_PlayableVehicleContainer
 		return true;
 	}
 
-	static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
+	static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs , ScriptCtx ctx)
 	{
-		bool same = true;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		if (!lhs.CompareStringSnapshots(rhs)) same = false;
-		if (!lhs.CompareSnapshots(rhs, 4)) same = false;
-		return same;
+		return lhs.CompareSnapshots(rhs, 4)
+		    && lhs.CompareStringSnapshots(rhs)
+		    && lhs.CompareStringSnapshots(rhs)
+		    && lhs.CompareSnapshots(rhs, 4)
+		    && lhs.CompareSnapshots(rhs, 4)
+		    && lhs.CompareStringSnapshots(rhs)
+		    && lhs.CompareSnapshots(rhs, 4);
 	}
 
 	static bool PropCompare(PS_PlayableVehicleContainer instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
 	{
-		bool same = true;
-		if (!snapshot.CompareInt(instance.m_iRplId)) same = false;
-		if (!snapshot.CompareString(instance.m_sPrefabName)) same = false;
-		if (!snapshot.CompareString(instance.m_sIconPath)) same = false;
-		if (!snapshot.CompareInt(instance.m_iGroupCallsign)) same = false;
-		if (!snapshot.CompareInt(instance.m_iGroupId)) same = false;
-		if (!snapshot.CompareString(instance.m_sFactionKey)) same = false;
-		if (!snapshot.CompareInt(instance.m_iLocked)) same = false;
-		return same;
+		return snapshot.CompareInt(instance.m_iRplId)
+		    && snapshot.CompareString(instance.m_sPrefabName)
+		    && snapshot.CompareString(instance.m_sIconPath)
+		    && snapshot.CompareInt(instance.m_iGroupCallsign)
+		    && snapshot.CompareInt(instance.m_iGroupId)
+		    && snapshot.CompareString(instance.m_sFactionKey)
+		    && snapshot.CompareInt(instance.m_iLocked);
 	}
 	
 	void Save(ScriptBitWriter writer)
@@ -110,15 +106,16 @@ class PS_PlayableVehicleContainer
 		writer.WriteInt(m_iLocked);
 	}
 	
-	void Load(ScriptBitReader reader)
+	bool Load(ScriptBitReader reader)
 	{
-		reader.ReadInt(m_iRplId);
-		reader.ReadString(m_sPrefabName);
-		reader.ReadString(m_sIconPath);
-		reader.ReadInt(m_iGroupCallsign);
-		reader.ReadInt(m_iGroupId);
-		reader.ReadString(m_sFactionKey);
-		reader.ReadInt(m_iLocked);
+		if (!reader.ReadInt(m_iRplId)) return false;
+		if (!reader.ReadString(m_sPrefabName)) return false;
+		if (!reader.ReadString(m_sIconPath)) return false;
+		if (!reader.ReadInt(m_iGroupCallsign)) return false;
+		if (!reader.ReadInt(m_iGroupId)) return false;
+		if (!reader.ReadString(m_sFactionKey)) return false;
+		if (!reader.ReadInt(m_iLocked)) return false;
+		return true;
 	}
 	
 	void SetLock(bool lock)
